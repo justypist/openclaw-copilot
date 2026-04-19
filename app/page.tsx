@@ -1,5 +1,7 @@
 import { connection } from 'next/server'
 
+import Link from 'next/link'
+
 import SessionsWorkspace from '@/app/_components/sessions-workspace'
 import { getSessionMessages, getSessionsOverview } from '@/lib/openclaw/sessions'
 
@@ -66,7 +68,15 @@ export default async function Home({ searchParams }: HomePageProps) {
       <main className="mx-auto flex w-full max-w-[1680px] flex-col gap-4">
         <section className="border border-black bg-white px-4 py-3 sm:px-5">
           <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
-            <h1 className="text-base font-medium tracking-[-0.02em]">OpenClaw Copilot</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-base font-medium tracking-[-0.02em]">OpenClaw Copilot</h1>
+              <Link
+                href="/skills"
+                className="border border-black px-2.5 py-1 text-xs transition-colors hover:bg-neutral-100"
+              >
+                Skills Library
+              </Link>
+            </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600 sm:text-sm">
               <span>{sessions.length} sessions</span>
               <span>{selectedSession?.title ?? 'No session selected'}</span>

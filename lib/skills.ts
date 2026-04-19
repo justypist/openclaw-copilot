@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 
 import { config } from '@/config'
@@ -14,9 +14,29 @@ export interface FinalizedSkillDraft {
   files: SkillFileDraft[]
 }
 
+export type SkillLocation = 'available' | 'enabled'
+
+export interface SkillSummary {
+  folderName: string
+  location: SkillLocation
+  name: string
+  description: string
+  filePaths: string[]
+  updatedAt?: number
+}
+
+export interface SkillsLibrary {
+  root: string
+  availableSkillsDirectory: string
+  enabledSkillsDirectory: string
+  availableSkills: SkillSummary[]
+  enabledSkills: SkillSummary[]
+}
+
 interface SkillsContext {
   root: string
   availableSkillsDirectory: string
+  enabledSkillsDirectory: string
 }
 
 function normalizeText(value: unknown): string {
@@ -102,6 +122,117 @@ function validateSkillFilePath(path: string): string {
   return normalizedPath
 }
 
+function validateSkillDirectoryName(value: string): string {
+  const normalizedValue = normalizeRelativePath(value).trim()
+
+  if (!normalizedValue || normalizedValue === '.' || normalizedValue.startsWith('/')) {
+    throw new Error('skill 目录名不合法。')
+  }
+
+  const segments = normalizedValue.split('/')
+
+  if (segments.length !== 1 || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error('skill 目录名不合法。')
+  }
+
+  return normalizedValue
+}
+
+function parseFrontmatterValue(frontmatter: string, key: string): string {
+  const match = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))
+
+  if (!match) {
+    return ''
+  }
+
+  return match[1].trim().replace(/^['"]|['"]$/g, '')
+}
+
+function parseSkillMetadata(content: string, fallbackFolderName: string): {
+  name: string
+  description: string
+} {
+  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n?/)
+  const frontmatter = frontmatterMatch?.[1] ?? ''
+  const headingMatch = content.match(/^#\s+(.+)$/m)
+  const descriptionFromBody = content
+    .replace(/^---\n[\s\S]*?\n---\n?/, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean)
+
+  return {
+    name: parseFrontmatterValue(frontmatter, 'name') || headingMatch?.[1]?.trim() || fallbackFolderName,
+    description: parseFrontmatterValue(frontmatter, 'description') || descriptionFromBody || '暂无描述',
+  }
+}
+
+async function collectSkillFiles(directory: string, parentPath = ''): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true })
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const relativePath = parentPath ? `${parentPath}/${entry.name}` : entry.name
+      const absolutePath = join(directory, entry.name)
+
+      if (entry.isDirectory()) {
+        return collectSkillFiles(absolutePath, relativePath)
+      }
+
+      return relativePath
+    }),
+  )
+
+  return files.flat().sort((left, right) => left.localeCompare(right))
+}
+
+async function listSkillsFromDirectory(
+  directory: string,
+  location: SkillLocation,
+): Promise<SkillSummary[]> {
+  if (!(await pathExists(directory))) {
+    return []
+  }
+
+  const entries = await readdir(directory, { withFileTypes: true })
+  const summaries: Array<SkillSummary | null> = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const folderName = validateSkillDirectoryName(entry.name)
+        const skillDirectory = join(directory, folderName)
+        const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+        if (!(await pathExists(skillFilePath))) {
+          return null
+        }
+
+        const [content, filePaths, skillStat] = await Promise.all([
+          readFile(skillFilePath, 'utf8'),
+          collectSkillFiles(skillDirectory),
+          stat(skillDirectory),
+        ])
+        const metadata = parseSkillMetadata(content, folderName)
+
+        return {
+          folderName,
+          location,
+          name: metadata.name,
+          description: metadata.description,
+          filePaths,
+          updatedAt: skillStat.mtimeMs,
+        } satisfies SkillSummary
+      }),
+  )
+
+  return summaries
+    .filter((summary): summary is SkillSummary => summary !== null)
+    .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+}
+
+function resolveSkillDirectory(context: SkillsContext, location: SkillLocation): string {
+  return location === 'enabled' ? context.enabledSkillsDirectory : context.availableSkillsDirectory
+}
+
 export function validateFinalizedSkillDraft(input: FinalizedSkillDraft): FinalizedSkillDraft {
   const folderName = slugifySkillName(normalizeText(input.folderName))
 
@@ -169,7 +300,99 @@ export async function resolveSkillsContext(): Promise<
     data: {
       root,
       availableSkillsDirectory: join(root, 'available-skills'),
+      enabledSkillsDirectory: join(root, 'enabled-skills'),
     },
+  }
+}
+
+export async function getSkillsLibrary(): Promise<
+  | {
+      ok: true
+      data: SkillsLibrary
+    }
+  | {
+      ok: false
+      error: string
+      root: string
+    }
+> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    return context
+  }
+
+  const { root, availableSkillsDirectory, enabledSkillsDirectory } = context.data
+  const [availableSkills, enabledSkills] = await Promise.all([
+    listSkillsFromDirectory(availableSkillsDirectory, 'available'),
+    listSkillsFromDirectory(enabledSkillsDirectory, 'enabled'),
+  ])
+
+  return {
+    ok: true,
+    data: {
+      root,
+      availableSkillsDirectory,
+      enabledSkillsDirectory,
+      availableSkills,
+      enabledSkills,
+    },
+  }
+}
+
+export async function moveSkills(input: {
+  from: SkillLocation
+  skillFolderNames: string[]
+}): Promise<{
+  movedSkillFolderNames: string[]
+  sourceDirectory: string
+  targetDirectory: string
+  targetLocation: SkillLocation
+}> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const targetLocation: SkillLocation = input.from === 'available' ? 'enabled' : 'available'
+  const sourceDirectory = resolveSkillDirectory(context.data, input.from)
+  const targetDirectory = resolveSkillDirectory(context.data, targetLocation)
+  const skillFolderNames = Array.from(
+    new Set(input.skillFolderNames.map(validateSkillDirectoryName)),
+  )
+
+  if (skillFolderNames.length === 0) {
+    throw new Error('至少需要选择一个 skill。')
+  }
+
+  await mkdir(sourceDirectory, { recursive: true })
+  await mkdir(targetDirectory, { recursive: true })
+
+  for (const folderName of skillFolderNames) {
+    const sourceSkillDirectory = join(sourceDirectory, folderName)
+    const targetSkillDirectory = join(targetDirectory, folderName)
+
+    if (!(await pathExists(sourceSkillDirectory))) {
+      throw new Error(`skill 不存在：${folderName}`)
+    }
+
+    if (await pathExists(targetSkillDirectory)) {
+      throw new Error(`目标目录已存在同名 skill：${folderName}`)
+    }
+  }
+
+  await Promise.all(
+    skillFolderNames.map((folderName) =>
+      rename(join(sourceDirectory, folderName), join(targetDirectory, folderName)),
+    ),
+  )
+
+  return {
+    movedSkillFolderNames: skillFolderNames,
+    sourceDirectory,
+    targetDirectory,
+    targetLocation,
   }
 }
 

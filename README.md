@@ -11,8 +11,8 @@
 - [x] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
 - [x] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
 - [x] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
-- [ ] 再提供一个页面用于展示 available-skills enabled-skills
-  - [ ] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
+- [x] 再提供一个页面用于展示 available-skills enabled-skills
+  - [x] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
   - [ ] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
 
 ## 当前实现状态
@@ -36,6 +36,11 @@
   - 预览最终将保存的全部文件内容
   - 点击 `Save to available-skills` 写入 `config.openclaw.root/available-skills/<folderName>`
   - 点击 `Back to Timeline` 返回时间线继续调整勾选
+- 当前已新增 `Skills Library` 页面：
+  - 展示 `available-skills` 与 `enabled-skills`
+  - 支持分别多选 skill 目录
+  - 支持把选中的 skill 在两个目录之间整目录转移
+  - 首页顶部可直接跳转到该页面
 
 ## 已实现文件
 
@@ -69,9 +74,18 @@
 - `app/api/skills/save/route.ts`
   - 新增服务端保存接口。
   - 接收定稿后的 skill 文件集合并写入 `available-skills`。
+- `app/api/skills/move/route.ts`
+  - 新增服务端转移接口。
+  - 支持把选中的 skill 目录在 `available-skills` / `enabled-skills` 之间移动。
 - `lib/skills.ts`
   - 抽取 skill 相关公共逻辑。
-  - 包含时间线上下文格式化、文件路径校验、目录名规范化与写盘逻辑。
+  - 包含时间线上下文格式化、文件路径校验、目录名规范化、skill 目录扫描、目录转移与写盘逻辑。
+- `app/skills/page.tsx`
+  - 新增 skills 管理页 Server Component。
+  - 负责按请求读取 `available-skills` / `enabled-skills`。
+- `app/_components/skills-workspace.tsx`
+  - 新增 skills 管理页 Client Component。
+  - 负责多选 skill 与调用转移接口。
 - `app/layout.tsx`
   - 已切换为 Geist / Geist Mono 字体。
 - `app/globals.css`
@@ -143,7 +157,8 @@
 
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
 - 当前已具备完整生成、手动编辑、局部选区改写链路。
-- 下一步可继续补 `available-skills / enabled-skills` 管理页与多 skill 合并流。
+- 当前已补完 `available-skills / enabled-skills` 管理页。
+- 下一步可继续补多 skill 合并流。
 - 局部改写时，AI 仍然可以同时参考：
   - 用户原始需求
   - assistant 的处理过程
