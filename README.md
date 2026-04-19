@@ -1,8 +1,8 @@
 # OpenClaw Copilot
 
 - [x] 读取 config.openclaw.root 下的聊天记录
-- [ ] 页面左侧按照时间倒叙列出所有会话
-- [ ] 可以通过鼠标选择其中一个会话，列出该会话的聊天记录
+- [x] 页面左侧按照时间倒叙列出所有会话
+- [x] 可以通过鼠标选择其中一个会话，列出该会话的聊天记录
 - [ ] 可以选择其中某些聊天记录，或者选择全部
 - [ ] 选择记录后出现一个按钮 “Create Skill”
   - [ ] 点击后隐藏聊天记录, 出现两个输入框，分别是 name description
@@ -17,18 +17,33 @@
 
 ## 当前实现状态
 
-- 已完成第 1 步，只做了“读取 `config.openclaw.root` 下的聊天记录”以及一个最小验收页。
-- 当前首页不是最终产品 UI，只是为了验证聊天记录已经成功读到。
-- 下一步应继续做“左侧会话列表 + 选择会话后展示消息”，不要重做已有的数据读取层。
+- 已完成第 1 步和第 2 步。
+- 当前首页已经是“两栏工作台”：
+  - 左侧按 `updatedAt` 倒序展示全部会话。
+  - 右侧展示当前选中会话的完整时间线。
+- 当前 UI 已收敛为黑白直角风格，左右两栏均为固定高度内部滚动。
+- 当前右侧不再只展示普通文本消息，而是尽量保留完整会话上下文，便于后续做 skill 总结。
+- 下一步应进入“选择某些聊天记录/选择全部 + Create Skill”。
 
 ## 已实现文件
 
 - `lib/openclaw/sessions.ts`
   - 服务端读取 OpenClaw 会话索引和 `.jsonl` 聊天记录。
-  - 暂时导出 `getSessionsOverview()`。
+  - 当前已导出：
+    - `getSessionsOverview()`
+    - `getSessionMessages(sessionId)`
+  - 已支持把单个会话解析成完整时间线。
 - `app/page.tsx`
-  - 当前为最小验收页。
+  - 当前为首页 Server Component。
+  - 负责按请求读取会话列表、根据 `searchParams.session` 读取当前选中会话。
   - 已设置 `export const dynamic = 'force-dynamic'`，保证按请求实时读取，不使用构建时快照。
+- `app/_components/sessions-workspace.tsx`
+  - 当前首页的 Client Component 工作台。
+  - 负责左侧点击切换会话、右侧展示完整时间线。
+- `app/layout.tsx`
+  - 已切换为 Geist / Geist Mono 字体。
+- `app/globals.css`
+  - 已补充黑白风格与滚动条样式。
 
 ## 数据来源
 
@@ -46,40 +61,63 @@
 
 ## 当前解析规则
 
-- 只把 `type === "message"` 且 `role === "user" | "assistant"` 的记录计入可展示消息数。
-- `content[]` 中只提取 `type === "text"` 的文本。
-- 默认忽略这些记录类型：
-  - `session`
-  - `custom`
-  - `model_change`
-  - `thinking_level_change`
-- 当前 `toolResult` 也没有进入展示统计。
+- `messageCount` 仍然只统计可读的普通对话消息：
+  - `type === "message"`
+  - `role === "user" | "assistant"`
+  - 且 `content[]` 里存在可提取的 `text`
+- 右侧时间线当前会尽量保留所有已知类型，不再只展示普通聊天文本。
+- 当前已纳入展示的记录/内容类型包括：
+  - 顶层记录：
+    - `session`
+    - `model_change`
+    - `thinking_level_change`
+    - `custom`
+    - `message`
+  - `message.role`：
+    - `user`
+    - `assistant`
+    - `toolResult`
+  - `message.content[]`：
+    - `text`
+    - `thinking`
+    - `toolCall`
+- 对于未来未知的顶层记录类型或未知的 `content[]` 类型，当前实现会回退为原始 JSON 文本展示，避免丢失信息。
 - 会话标题 `title` 当前优先取第一条有意义的用户文本，取不到则回退到 `sessionKey`。
 
 ## 当前首页展示内容
 
-- `OPENCLAW_ROOT`
-- `sessions` 目录
-- 会话总数
-- 最近展示数量
-- 最近更新时间
-- 最近 12 个会话的简表：
-  - `title`
-  - `sessionKey`
-  - `updatedAt`
-  - `startedAt`
-  - `messageCount`
-  - `status`
-  - `model`
-  - `channel`
+- 顶部一行摘要：
+  - 应用标题
+  - 会话总数
+  - 当前选中会话标题
+  - 最近更新时间
+- 左侧会话列表：
+  - 全部会话
+  - 按 `updatedAt` 倒序
+  - 可点击切换
+  - 展示 `title / sessionKey / messageCount / channel / updatedAt`
+- 右侧当前会话详情：
+  - 会话标题与 `sessionKey`
+  - `messageCount / timeline entries / status / model / startedAt`
+  - 完整时间线：
+    - user
+    - assistant
+    - thinking
+    - tool call
+    - tool result
+    - session / custom / model change / thinking level 等事件
 
 ## 下一步建议
 
-- 直接进入第 2 步：把当前首页改成两栏布局。
-- 左侧：按 `updatedAt` 倒序列出全部会话。
-- 右侧：点击会话后展示该会话消息。
-- 建议在 `lib/openclaw/sessions.ts` 里补一个 `getSessionMessages(sessionId)`，复用已有解析逻辑。
-- 第 2 步开始再引入 Client Component 处理选中态，尽量保持数据读取继续放在服务端。
+- 直接进入第 3 步：支持选择某些时间线记录，或一键全选。
+- 选中后出现 `Create Skill` 按钮。
+- 建议优先保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
+- 这样后续生成 skill 时，AI 才能同时参考：
+  - 用户原始需求
+  - assistant 的处理过程
+  - tool call / tool result
+  - 其他上下文事件
+- 数据读取仍尽量继续放在服务端；选择态与交互态放在 Client Component。
 
 ## 已验证
 
@@ -88,5 +126,5 @@
 
 ## 已知事项
 
-- 构建时有一个已有警告：`config.ts` 被 `instrumentation.ts` 引用，而 `config.ts` 使用了 `process.cwd()`，因此会出现 Edge Runtime 警告。
-- 这个警告不是本次第 1 步引入的问题，当前不影响构建通过。
+- 当前未发现阻塞继续开发的问题。
+- README 早期提到的 `config.ts` / Edge Runtime 警告说明已过时：本轮 `pnpm build` 未出现该警告。

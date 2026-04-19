@@ -15,6 +15,29 @@ export interface SessionSummary {
   title: string
 }
 
+export interface SessionMessage {
+  id: string
+  role:
+    | 'user'
+    | 'assistant'
+    | 'thinking'
+    | 'tool-call'
+    | 'tool-result'
+    | 'session'
+    | 'model-change'
+    | 'thinking-level-change'
+    | 'custom'
+    | 'content-part'
+    | 'event'
+  text: string
+  timestamp?: number
+  toolName?: string
+  toolCallId?: string
+  isError?: boolean
+  label?: string
+  details?: string
+}
+
 interface SessionsOverviewData {
   root: string
   sessionsDirectory: string
@@ -46,23 +69,54 @@ interface SessionIndexRecord {
 }
 
 interface SessionFileRecord {
+  id?: string
+  parentId?: string
   type?: string
   timestamp?: string
+  version?: number
+  cwd?: string
+  provider?: string
+  modelId?: string
+  thinkingLevel?: string
+  customType?: string
+  data?: unknown
   message?: {
     role?: string
     content?: SessionContentPart[]
+    timestamp?: number
+    toolCallId?: string
+    toolName?: string
+    isError?: boolean
+    api?: string
+    provider?: string
+    model?: string
+    usage?: unknown
+    stopReason?: string
+    responseId?: string
   }
 }
 
 interface SessionContentPart {
   type?: string
   text?: string
+  thinking?: string
+  thinkingSignature?: string
+  id?: string
+  name?: string
+  arguments?: unknown
+  partialJson?: string
 }
 
 interface ParsedSessionFile {
   startedAt?: number
   title?: string
   messageCount: number
+  messages?: SessionMessage[]
+}
+
+interface SessionsContext {
+  root: string
+  sessionsDirectory: string
 }
 
 const MAX_TITLE_LENGTH = 80
@@ -100,6 +154,28 @@ function truncate(text: string, maxLength: number): string {
   return `${text.slice(0, maxLength - 1)}…`
 }
 
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function stringifyRecordDetails(value: Record<string, unknown>): string {
+  const entries = Object.entries(value).filter(([, entryValue]) => entryValue !== undefined)
+
+  if (entries.length === 0) {
+    return ''
+  }
+
+  return stringifyUnknown(Object.fromEntries(entries))
+}
+
 function buildTitleFromText(text: string): string | undefined {
   const lines = text
     .split('\n')
@@ -132,13 +208,274 @@ function fallbackTitle(sessionKey: string, sessionId: string): string {
   return `session:${sessionId}`
 }
 
-async function parseSessionFile(sessionFilePath: string): Promise<ParsedSessionFile> {
+function extractTextParts(content: SessionContentPart[] | undefined): string[] {
+  if (!content) {
+    return []
+  }
+
+  return content
+    .filter((part) => part.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text?.trim() ?? '')
+    .filter(Boolean)
+}
+
+function buildEventEntry(input: {
+  id: string
+  role: SessionMessage['role']
+  timestamp?: number
+  text: string
+  label?: string
+  details?: string
+  toolName?: string
+  toolCallId?: string
+  isError?: boolean
+}): SessionMessage {
+  return input
+}
+
+function buildToolCallEntry(
+  part: SessionContentPart,
+  fallbackId: string,
+  index: number,
+  timestamp: number | undefined,
+): SessionMessage {
+  const argumentsText =
+    part.arguments !== undefined ? stringifyUnknown(part.arguments) : part.partialJson?.trim() ?? ''
+
+  return {
+    id: part.id ?? `${fallbackId}-tool-call-${index + 1}`,
+    role: 'tool-call',
+    text: argumentsText,
+    timestamp,
+    toolName: part.name,
+    toolCallId: part.id,
+    label: part.name,
+  }
+}
+
+function getMessageTimestamp(record: SessionFileRecord): number | undefined {
+  if (typeof record.message?.timestamp === 'number') {
+    return record.message.timestamp
+  }
+
+  if (!record.timestamp) {
+    return undefined
+  }
+
+  const timestamp = Date.parse(record.timestamp)
+
+  if (Number.isNaN(timestamp)) {
+    return undefined
+  }
+
+  return timestamp
+}
+
+function extractTimelineEntries(record: SessionFileRecord, messageCount: number): SessionMessage[] {
+  const recordTimestamp =
+    typeof record.timestamp === 'string' && !Number.isNaN(Date.parse(record.timestamp))
+      ? Date.parse(record.timestamp)
+      : undefined
+  const role = record.message?.role
+  const timestamp = getMessageTimestamp(record)
+
+  if (record.type === 'session') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `session-${messageCount}`,
+        role: 'session',
+        timestamp: recordTimestamp,
+        text: stringifyRecordDetails({
+          version: record.version,
+          cwd: record.cwd,
+        }),
+        label: 'session',
+        details: record.id,
+      }),
+    ]
+  }
+
+  if (record.type === 'model_change') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `model-change-${messageCount}`,
+        role: 'model-change',
+        timestamp: recordTimestamp,
+        text: stringifyRecordDetails({
+          provider: record.provider,
+          modelId: record.modelId,
+        }),
+        label: 'model change',
+        details: record.parentId,
+      }),
+    ]
+  }
+
+  if (record.type === 'thinking_level_change') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `thinking-level-${messageCount}`,
+        role: 'thinking-level-change',
+        timestamp: recordTimestamp,
+        text: stringifyRecordDetails({
+          thinkingLevel: record.thinkingLevel,
+        }),
+        label: 'thinking level',
+        details: record.parentId,
+      }),
+    ]
+  }
+
+  if (record.type === 'custom') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `custom-${messageCount}`,
+        role: 'custom',
+        timestamp: recordTimestamp,
+        text: stringifyUnknown(record.data ?? '(empty custom data)'),
+        label: record.customType ?? 'custom',
+        details: record.parentId,
+      }),
+    ]
+  }
+
+  if (record.type !== 'message') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `event-${messageCount}`,
+        role: 'event',
+        timestamp: recordTimestamp,
+        text: stringifyUnknown(record),
+        label: record.type ?? 'event',
+        details: record.parentId,
+      }),
+    ]
+  }
+
+  if (role === 'toolResult') {
+    const textParts = extractTextParts(record.message?.content)
+    const contentText = textParts.join('\n\n').trim()
+
+    return [
+      buildEventEntry({
+        id: record.id ?? `tool-result-${messageCount}`,
+        role: 'tool-result',
+        text: contentText || '(empty tool result)',
+        timestamp,
+        toolName: record.message?.toolName,
+        toolCallId: record.message?.toolCallId,
+        isError: record.message?.isError,
+        label: record.message?.toolName ?? 'tool result',
+        details: record.message?.toolCallId,
+      }),
+    ]
+  }
+
+  if (role !== 'user' && role !== 'assistant') {
+    return [
+      buildEventEntry({
+        id: record.id ?? `message-${messageCount}`,
+        role: 'event',
+        text: stringifyUnknown(record.message ?? '(empty message)'),
+        timestamp,
+        label: role ?? 'message',
+        details: record.id,
+      }),
+    ]
+  }
+
+  const speaker: 'user' | 'assistant' = role
+  const entries: SessionMessage[] = []
+  const content = record.message?.content ?? []
+  let textParts: string[] = []
+  let textIndex = 0
+  let thinkingIndex = 0
+  let toolCallIndex = 0
+  let contentPartIndex = 0
+
+  function flushTextParts() {
+    const text = textParts.join('\n\n').trim()
+
+    if (!text) {
+      textParts = []
+      return
+    }
+
+    textIndex += 1
+    entries.push({
+      id: `${record.id ?? speaker}-text-${textIndex}`,
+      role: speaker,
+      text,
+      timestamp,
+    })
+    textParts = []
+  }
+
+  for (const part of content) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      const value = part.text.trim()
+
+      if (value) {
+        textParts.push(value)
+      }
+
+      continue
+    }
+
+    if (part.type === 'thinking') {
+      flushTextParts()
+      thinkingIndex += 1
+      entries.push(
+        buildEventEntry({
+          id: `${record.id ?? speaker}-thinking-${thinkingIndex}`,
+          role: 'thinking',
+          text: part.thinking?.trim() || '(empty thinking block)',
+          timestamp,
+          label: 'thinking',
+          details: part.thinkingSignature,
+        }),
+      )
+      continue
+    }
+
+    if (part.type === 'toolCall' && typeof part.name === 'string') {
+      flushTextParts()
+      toolCallIndex += 1
+      entries.push(buildToolCallEntry(part, record.id ?? speaker, toolCallIndex, timestamp))
+      continue
+    }
+
+    flushTextParts()
+    contentPartIndex += 1
+    entries.push(
+      buildEventEntry({
+        id: `${record.id ?? speaker}-part-${contentPartIndex}`,
+        role: 'content-part',
+        text: stringifyUnknown(part),
+        timestamp,
+        label: part.type ?? 'content part',
+      }),
+    )
+  }
+
+  flushTextParts()
+
+  return entries
+}
+
+async function parseSessionFile(
+  sessionFilePath: string,
+  options?: {
+    includeMessages?: boolean
+  },
+): Promise<ParsedSessionFile> {
   const contents = await readFile(sessionFilePath, 'utf8')
   const lines = contents.split('\n').filter(Boolean)
 
   let startedAt: number | undefined
   let title: string | undefined
   let messageCount = 0
+  const messages: SessionMessage[] | undefined = options?.includeMessages ? [] : undefined
 
   for (const line of lines) {
     let record: SessionFileRecord
@@ -158,10 +495,16 @@ async function parseSessionFile(sessionFilePath: string): Promise<ParsedSessionF
     }
 
     if (record.type !== 'message') {
+      messages?.push(...extractTimelineEntries(record, messageCount))
       continue
     }
 
     const role = record.message?.role
+
+    if (role === 'toolResult') {
+      messages?.push(...extractTimelineEntries(record, messageCount))
+      continue
+    }
 
     if (role !== 'user' && role !== 'assistant') {
       continue
@@ -169,25 +512,36 @@ async function parseSessionFile(sessionFilePath: string): Promise<ParsedSessionF
 
     const text = extractText(record.message?.content)
 
-    if (!text) {
-      continue
+    if (text) {
+      messageCount += 1
+
+      if (!title && role === 'user') {
+        title = buildTitleFromText(text)
+      }
     }
 
-    messageCount += 1
-
-    if (!title && role === 'user') {
-      title = buildTitleFromText(text)
-    }
+    messages?.push(...extractTimelineEntries(record, messageCount))
   }
 
   return {
     startedAt,
     title,
     messageCount,
+    messages,
   }
 }
 
-export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
+async function resolveSessionsContext(): Promise<
+  | {
+      ok: true
+      data: SessionsContext
+    }
+  | {
+      ok: false
+      error: string
+      root: string
+    }
+> {
   const root = config.openclaw.root.trim()
 
   if (!root) {
@@ -215,6 +569,24 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
       root,
     }
   }
+
+  return {
+    ok: true,
+    data: {
+      root,
+      sessionsDirectory,
+    },
+  }
+}
+
+export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
+  const context = await resolveSessionsContext()
+
+  if (!context.ok) {
+    return context
+  }
+
+  const { root, sessionsDirectory } = context.data
 
   const sessionsIndexPath = join(sessionsDirectory, 'sessions.json')
 
@@ -256,6 +628,66 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
       root,
       sessionsDirectory,
       sessions: sessions.toSorted((left, right) => right.updatedAt - left.updatedAt),
+    },
+  }
+}
+
+export type SessionMessagesResult =
+  | {
+      ok: true
+      data: {
+        root: string
+        sessionsDirectory: string
+        sessionId: string
+        messages: SessionMessage[]
+      }
+    }
+  | {
+      ok: false
+      error: string
+      root: string
+    }
+
+export async function getSessionMessages(sessionId: string): Promise<SessionMessagesResult> {
+  const normalizedSessionId = sessionId.trim()
+  const fallbackRoot = config.openclaw.root.trim()
+
+  if (!normalizedSessionId) {
+    return {
+      ok: false,
+      error: '缺少 sessionId。',
+      root: fallbackRoot,
+    }
+  }
+
+  const context = await resolveSessionsContext()
+
+  if (!context.ok) {
+    return context
+  }
+
+  const { root, sessionsDirectory } = context.data
+  const sessionFilePath = join(sessionsDirectory, `${normalizedSessionId}.jsonl`)
+
+  if (!(await pathExists(sessionFilePath))) {
+    return {
+      ok: false,
+      error: `找不到会话文件：${sessionFilePath}`,
+      root,
+    }
+  }
+
+  const parsed = await parseSessionFile(sessionFilePath, {
+    includeMessages: true,
+  })
+
+  return {
+    ok: true,
+    data: {
+      root,
+      sessionsDirectory,
+      sessionId: normalizedSessionId,
+      messages: parsed.messages ?? [],
     },
   }
 }
