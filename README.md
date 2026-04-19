@@ -10,16 +10,16 @@
   - [x] 生成后用户可以在 textarea 中对生成的内容进行编辑
 - [x] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
 - [x] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
-- [x] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
-- [x] 再提供一个页面用于展示 available-skills enabled-skills
-  - [x] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
-  - [x] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
+- [x] 点击保存按钮，将最终SKILL写入 `config.openclaw.root/workspace/skills.available` 文件夹
+- [x] 再提供一个页面用于展示 `${OPENCLAW_ROOT}/workspace/skills.available` 和 `${OPENCLAW_ROOT}/workspace/skills`
+  - [x] 可以对 `${OPENCLAW_ROOT}/workspace/skills.available` 中的 skill 进行勾选，勾选后转移到 `${OPENCLAW_ROOT}/workspace/skills`，再次勾选可以转移回来
+  - [x] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 `workspace/skills.available`
 - [x] 优化 skill editor
   - [x] 选中文本弹窗形式修改，而不是在下方出现一个输入框
   - [x] 优化skill结束流程，目前有冗余
   - [x] 最后保存时，添加一个按钮，用于直接保存，而不再经过LLM进行拆分
-- [ ] 支持下载skill
-- [ ] 修改enabled skills目录， ${OPENCLAW_ROOT}/workspace/skills
+- [x] 支持下载 skill
+- [x] 修改 enabled skills 目录，`${OPENCLAW_ROOT}/workspace/skills`
 
 ## 当前实现状态
 
@@ -41,15 +41,16 @@
   - 点击 `Finalize Skill Files` 让 AI 产出最终 skill 文件集合，默认至少包含 `SKILL.md`
   - 支持跳过定稿拆分，直接将当前编辑内容保存为单个 `SKILL.md`
   - 预览最终将保存的全部文件内容
-  - 点击 `Save to available-skills` 写入 `config.openclaw.root/available-skills/<folderName>`
+  - 点击 `Save to skills.available` 写入 `config.openclaw.root/workspace/skills.available/<folderName>`
   - 保存成功后可直接完成并返回时间线，或跳转到 `Skills Library`
   - 点击 `Back to Timeline` 返回时间线继续调整勾选
 - 当前已新增 `Skills Library` 页面：
-  - 展示 `available-skills` 与 `enabled-skills`
+  - 展示 `${OPENCLAW_ROOT}/workspace/skills.available` 与 `${OPENCLAW_ROOT}/workspace/skills`
   - 支持分别多选 skill 目录
   - 支持把选中的 skill 在两个目录之间整目录转移
+  - 支持把当前选中的一个或多个 skills 下载为 `.tar.gz`
   - 支持跨 `available/enabled` 多选多个 skills 后进入 `Merge Skill` 编辑流
-  - 合并流支持：生成合并草稿、弹窗式选区局部改写、定稿拆分或直接保存单个 `SKILL.md` 到 `available-skills`
+  - 合并流支持：生成合并草稿、弹窗式选区局部改写、定稿拆分或直接保存单个 `SKILL.md` 到 `workspace/skills.available`
   - 合并保存成功后可直接返回 `Skills Library`
   - 首页顶部可直接跳转到该页面
 
@@ -84,10 +85,13 @@
   - 调用 AI 输出最终可保存的 skill 文件集合，至少包含 `SKILL.md`，必要时可拆分成多个文件。
 - `app/api/skills/save/route.ts`
   - 新增服务端保存接口。
-  - 接收定稿后的 skill 文件集合并写入 `available-skills`。
+  - 接收定稿后的 skill 文件集合并写入 `${OPENCLAW_ROOT}/workspace/skills.available`。
 - `app/api/skills/move/route.ts`
   - 新增服务端转移接口。
-  - 支持把选中的 skill 目录在 `available-skills` / `enabled-skills` 之间移动。
+  - 支持把选中的 skill 目录在 `${OPENCLAW_ROOT}/workspace/skills.available` / `${OPENCLAW_ROOT}/workspace/skills` 之间移动。
+- `app/api/skills/download/route.ts`
+  - 新增服务端下载接口。
+  - 支持把当前选中的一个或多个 skills 打包为 `.tar.gz` 下载。
 - `app/api/skills/merge/route.ts`
   - 新增服务端合并接口。
   - 接收多个已选 skill，调用 AI 生成合并后的完整 SKILL 草稿。
@@ -99,13 +103,13 @@
   - 接收当前合并草稿与源 skill 上下文，输出最终可保存的 skill 文件集合。
 - `lib/skills.ts`
   - 抽取 skill 相关公共逻辑。
-  - 包含时间线上下文格式化、skill 上下文格式化、文件路径校验、目录名规范化、skill 目录扫描、目录读取、目录转移与写盘逻辑。
+  - 包含时间线上下文格式化、skill 上下文格式化、文件路径校验、目录名规范化、skill 目录扫描、目录读取、目录转移、下载打包与写盘逻辑。
 - `app/skills/page.tsx`
   - 新增 skills 管理页 Server Component。
-  - 负责按请求读取 `available-skills` / `enabled-skills`。
+  - 负责按请求读取 `${OPENCLAW_ROOT}/workspace/skills.available` / `${OPENCLAW_ROOT}/workspace/skills`。
 - `app/_components/skills-workspace.tsx`
   - 新增 skills 管理页 Client Component。
-  - 负责多选 skill 与调用转移接口。
+  - 负责多选 skill、下载与调用转移接口。
 - `app/layout.tsx`
   - 已切换为 Geist / Geist Mono 字体。
 - `app/globals.css`
@@ -115,6 +119,9 @@
 
 - 根目录来自 `config.ts` 中的 `config.openclaw.root`
 - 当前实际读取路径：`<OPENCLAW_ROOT>/agents/main/sessions/`
+- Skills 目录：
+  - available: `<OPENCLAW_ROOT>/workspace/skills.available/`
+  - enabled: `<OPENCLAW_ROOT>/workspace/skills/`
 - 使用的文件：
   - `sessions.json`：会话索引
   - `<sessionId>.jsonl`：单个会话聊天记录
@@ -177,7 +184,7 @@
 
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
 - 当前已具备完整生成、手动编辑、局部选区改写链路。
-- 当前已补完 `available-skills / enabled-skills` 管理页。
+- 当前已补完 `workspace/skills.available / workspace/skills` 管理页，并支持下载。
 - 下一步可继续补充合并结果预览优化、冲突提示或合并策略微调。
 - 局部改写时，AI 仍然可以同时参考：
   - 用户原始需求

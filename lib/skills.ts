@@ -1,5 +1,7 @@
+import { execFile as execFileCallback } from 'node:child_process'
 import { access, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
+import { promisify } from 'node:util'
 
 import { config } from '@/config'
 import type { SessionMessage } from '@/lib/openclaw/sessions'
@@ -47,6 +49,8 @@ interface SkillsContext {
   availableSkillsDirectory: string
   enabledSkillsDirectory: string
 }
+
+const execFile = promisify(execFileCallback)
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -369,10 +373,14 @@ export async function resolveSkillsContext(): Promise<
     ok: true,
     data: {
       root,
-      availableSkillsDirectory: join(root, 'available-skills'),
-      enabledSkillsDirectory: join(root, 'enabled-skills'),
+      availableSkillsDirectory: join(root, 'workspace', 'skills.available'),
+      enabledSkillsDirectory: join(root, 'workspace', 'skills'),
     },
   }
+}
+
+function getSkillArchiveBasePath(location: SkillLocation): string {
+  return location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'
 }
 
 export async function getSkillsLibrary(): Promise<
@@ -502,6 +510,71 @@ export async function getSkillSources(input: { skills: SkillReference[] }): Prom
       ),
     ),
   )
+}
+
+export async function buildSkillDownloadArchive(input: { skills: SkillReference[] }): Promise<{
+  fileName: string
+  archive: Buffer
+}> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const references = Array.from(
+    new Map(
+      input.skills.map((skill) => {
+        const location = skill.location
+
+        if (location !== 'available' && location !== 'enabled') {
+          throw new Error('存在不合法的 skill 来源目录。')
+        }
+
+        const folderName = validateSkillDirectoryName(skill.folderName)
+
+        return [`${location}:${folderName}`, { location, folderName } satisfies SkillReference]
+      }),
+    ).values(),
+  )
+
+  if (references.length === 0) {
+    throw new Error('至少需要选择一个 skill。')
+  }
+
+  const archivePaths = await Promise.all(
+    references.map(async (reference) => {
+      const archivePath = normalizeRelativePath(
+        join(getSkillArchiveBasePath(reference.location), reference.folderName),
+      )
+
+      if (!(await pathExists(join(context.data.root, archivePath)))) {
+        throw new Error(`skill 不存在：${reference.folderName}`)
+      }
+
+      return archivePath
+    }),
+  )
+
+  const singleReference = references[0]
+  const fileName =
+    references.length === 1
+      ? `${singleReference.folderName}.tar.gz`
+      : `skills-${references.length}.tar.gz`
+
+  try {
+    const result = await execFile('tar', ['-czf', '-', '-C', context.data.root, ...archivePaths], {
+      encoding: 'buffer',
+      maxBuffer: 10 * 1024 * 1024,
+    })
+
+    return {
+      fileName,
+      archive: result.stdout,
+    }
+  } catch {
+    throw new Error('打包 skill 下载文件失败。')
+  }
 }
 
 export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Promise<{

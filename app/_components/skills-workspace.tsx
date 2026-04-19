@@ -37,7 +37,7 @@ function formatTimestamp(timestamp: number | undefined): string {
 }
 
 function getNextLocationLabel(location: SkillLocation): string {
-  return location === 'available' ? 'enabled-skills' : 'available-skills'
+  return location === 'available' ? 'workspace/skills' : 'workspace/skills.available'
 }
 
 function getSkillSelectionKey(location: SkillLocation, folderName: string): string {
@@ -164,6 +164,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   const [selectedEnabledFolderNames, setSelectedEnabledFolderNames] = useState<string[]>([])
   const [moveError, setMoveError] = useState('')
   const [moveSummary, setMoveSummary] = useState('')
+  const [downloadError, setDownloadError] = useState('')
+  const [isDownloadingSkills, setIsDownloadingSkills] = useState(false)
   const [hasRequestedMerge, setHasRequestedMerge] = useState(false)
   const [skillName, setSkillName] = useState('')
   const [skillDescription, setSkillDescription] = useState('')
@@ -201,7 +203,12 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   )
   const selectedSkillCount = selectedSkills.length
   const interactionDisabled =
-    isPending || isGeneratingSkill || isRewritingSelection || isFinalizingSkill || isSavingSkill
+    isPending ||
+    isGeneratingSkill ||
+    isRewritingSelection ||
+    isFinalizingSkill ||
+    isSavingSkill ||
+    isDownloadingSkills
 
   function resetFinalizedSkillState() {
     setFinalizedSkill(null)
@@ -235,6 +242,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
     setMoveError('')
     setMoveSummary('')
+    setDownloadError('')
 
     setter((currentFolderNames) =>
       currentFolderNames.includes(folderName)
@@ -436,6 +444,51 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       setSkillGenerationError(error instanceof Error ? error.message : '合并失败。')
     } finally {
       setIsGeneratingSkill(false)
+    }
+  }
+
+  async function handleDownloadSelectedSkills() {
+    if (selectedSkillCount === 0) {
+      return
+    }
+
+    setDownloadError('')
+    setIsDownloadingSkills(true)
+
+    try {
+      const response = await fetch('/api/skills/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          skills: selectedSkills,
+        }),
+      })
+
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string }
+
+        throw new Error(result.error || '下载失败。')
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('Content-Disposition')
+      const fileNameMatch = disposition?.match(/filename="([^"]+)"/)
+      const fileName = fileNameMatch?.[1] ? decodeURIComponent(fileNameMatch[1]) : 'skills.tar.gz'
+      const downloadUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+
+      anchor.href = downloadUrl
+      anchor.download = fileName
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(downloadUrl)
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : '下载失败。')
+    } finally {
+      setIsDownloadingSkills(false)
     }
   }
 
@@ -687,7 +740,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
           <div>
             <h1 className="text-base font-medium tracking-[-0.02em]">Skills Library</h1>
             <p className="mt-1 text-sm text-neutral-600">
-              展示 `available-skills` 和 `enabled-skills`，支持多选后转移，或直接合并多个 skills。
+              展示 `workspace/skills.available` 和 `workspace/skills`，支持多选后转移、下载，或直接合并多个 skills。
             </p>
           </div>
 
@@ -698,6 +751,16 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             >
               Sessions
             </Link>
+            <button
+              type="button"
+              onClick={() => {
+                void handleDownloadSelectedSkills()
+              }}
+              disabled={interactionDisabled || hasRequestedMerge || selectedSkillCount === 0}
+              className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+            >
+              {isDownloadingSkills ? 'Downloading...' : `Download Skill${selectedSkillCount > 1 ? 's' : ''} (${selectedSkillCount})`}
+            </button>
             <button
               type="button"
               onClick={() => handleMoveSkills('available')}
@@ -737,6 +800,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         </div>
 
         {moveError ? <p className="mt-3 text-sm text-red-600">{moveError}</p> : null}
+        {downloadError ? <p className="mt-3 text-sm text-red-600">{downloadError}</p> : null}
         {moveSummary ? <p className="mt-3 text-sm text-neutral-700">{moveSummary}</p> : null}
       </section>
 
@@ -745,9 +809,9 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
           <section className="border border-black bg-white p-4 sm:p-5">
             <div className="flex flex-col gap-2">
               <h2 className="text-sm font-medium tracking-[-0.02em]">Merge Skill Editor</h2>
-              <p className="text-sm text-neutral-600">
-                已选择 {selectedSkillCount} 个 skills。先生成合并草稿，再支持选区改写、定稿和保存到 `available-skills`。
-              </p>
+                <p className="text-sm text-neutral-600">
+                  已选择 {selectedSkillCount} 个 skills。先生成合并草稿，再支持选区改写、定稿和保存到 `workspace/skills.available`。
+                </p>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2 text-xs text-neutral-600">
@@ -913,10 +977,10 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
                           disabled={isSavingSkill}
                           className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
                         >
-                          {isSavingSkill ? 'Saving...' : 'Save to available-skills'}
+                          {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
                         </button>
                         <span className="text-sm text-neutral-500">
-                          将写入 `config.openclaw.root/available-skills/{finalizedSkill.folderName}`
+                          将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
                         </span>
                       </>
                     )}

@@ -87,7 +87,7 @@ export async function POST(request: Request) {
         '如果内容较短且自洽，只返回一个文件：SKILL.md。',
         '如果内容较长，可以拆分出少量辅助文件，例如 docs/*.md 或 resources/*.md，但不要过度拆分。',
         '所有 path 必须是相对路径，不能以 / 开头，不能包含 ..。',
-        'folderName 应稳定、简洁，适合作为 available-skills 下的目录名。',
+        'folderName 应稳定、简洁，适合作为 workspace/skills.available 下的目录名。',
         '不要编造仓库中不存在的命令、文件或工具；拆分后 SKILL.md 必须仍然能独立说明用途和使用时机。',
       ].join('\n'),
       prompt: [

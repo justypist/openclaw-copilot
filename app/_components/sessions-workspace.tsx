@@ -949,10 +949,10 @@ export default function SessionsWorkspace({
                                   disabled={isSavingSkill}
                                   className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
                                 >
-                                  {isSavingSkill ? 'Saving...' : 'Save to available-skills'}
+                                  {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
                                 </button>
                                 <span className="text-sm text-neutral-500">
-                                  将写入 `config.openclaw.root/available-skills/{finalizedSkill.folderName}`
+                                  将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
                                 </span>
                               </>
                             )}
