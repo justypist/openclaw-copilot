@@ -17,6 +17,9 @@ interface SelectionState {
   sessionId: string
   selectedMessageKeys: string[]
   hasRequestedSkillCreation: boolean
+  skillName: string
+  skillDescription: string
+  generatedSkillContent: string
 }
 
 const EMPTY_MESSAGE_KEYS: string[] = []
@@ -74,6 +77,9 @@ export default function SessionsWorkspace({
     sessionId: activeSessionId,
     selectedMessageKeys: [],
     hasRequestedSkillCreation: false,
+    skillName: '',
+    skillDescription: '',
+    generatedSkillContent: '',
   })
   const selectedMessageKeys =
     selectionState.sessionId === activeSessionId
@@ -81,11 +87,22 @@ export default function SessionsWorkspace({
       : EMPTY_MESSAGE_KEYS
   const hasRequestedSkillCreation =
     selectionState.sessionId === activeSessionId ? selectionState.hasRequestedSkillCreation : false
+  const skillName = selectionState.sessionId === activeSessionId ? selectionState.skillName : ''
+  const skillDescription =
+    selectionState.sessionId === activeSessionId ? selectionState.skillDescription : ''
+  const generatedSkillContent =
+    selectionState.sessionId === activeSessionId ? selectionState.generatedSkillContent : ''
+  const [isGeneratingSkill, setIsGeneratingSkill] = useState(false)
+  const [skillGenerationError, setSkillGenerationError] = useState('')
 
   const selectableMessageKeys = useMemo(() => messages.map(getMessageKey), [messages])
   const selectedMessageKeySet = useMemo(
     () => new Set(selectedMessageKeys),
     [selectedMessageKeys],
+  )
+  const selectedMessages = useMemo(
+    () => messages.filter((message) => selectedMessageKeySet.has(getMessageKey(message))),
+    [messages, selectedMessageKeySet],
   )
   const selectedCount = selectedMessageKeys.length
   const allSelected = selectableMessageKeys.length > 0 && selectedCount === selectableMessageKeys.length
@@ -104,6 +121,12 @@ export default function SessionsWorkspace({
     setSelectionState((currentState) => {
       const currentKeys =
         currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : []
+      const nextSkillName =
+        currentState.sessionId === activeSessionId ? currentState.skillName : ''
+      const nextSkillDescription =
+        currentState.sessionId === activeSessionId ? currentState.skillDescription : ''
+      const nextGeneratedSkillContent =
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : ''
 
       if (currentKeys.includes(messageKey)) {
         return {
@@ -111,6 +134,9 @@ export default function SessionsWorkspace({
           selectedMessageKeys: currentKeys.filter((key) => key !== messageKey),
           hasRequestedSkillCreation:
             currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+          skillName: nextSkillName,
+          skillDescription: nextSkillDescription,
+          generatedSkillContent: nextGeneratedSkillContent,
         }
       }
 
@@ -119,6 +145,9 @@ export default function SessionsWorkspace({
         selectedMessageKeys: [...currentKeys, messageKey],
         hasRequestedSkillCreation:
           currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+        skillName: nextSkillName,
+        skillDescription: nextSkillDescription,
+        generatedSkillContent: nextGeneratedSkillContent,
       }
     })
   }
@@ -128,6 +157,9 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys: selectableMessageKeys,
       hasRequestedSkillCreation,
+      skillName,
+      skillDescription,
+      generatedSkillContent,
     })
   }
 
@@ -136,7 +168,12 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys: [],
       hasRequestedSkillCreation: false,
+      skillName: '',
+      skillDescription: '',
+      generatedSkillContent: '',
     })
+    setSkillGenerationError('')
+    setIsGeneratingSkill(false)
   }
 
   function handleCreateSkill() {
@@ -144,7 +181,117 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys,
       hasRequestedSkillCreation: true,
+      skillName: skillName || selectedSession?.title || '',
+      skillDescription,
+      generatedSkillContent,
     })
+  }
+
+  function handleBackToTimeline() {
+    setSelectionState({
+      sessionId: activeSessionId,
+      selectedMessageKeys,
+      hasRequestedSkillCreation: false,
+      skillName,
+      skillDescription,
+      generatedSkillContent,
+    })
+  }
+
+  function handleSkillNameChange(nextValue: string) {
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillName: nextValue,
+      skillDescription:
+        currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
+      generatedSkillContent:
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+    }))
+  }
+
+  function handleSkillDescriptionChange(nextValue: string) {
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
+      skillDescription: nextValue,
+      generatedSkillContent:
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+    }))
+  }
+
+  function handleGeneratedSkillContentChange(nextValue: string) {
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
+      skillDescription:
+        currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
+      generatedSkillContent: nextValue,
+    }))
+  }
+
+  async function handleGenerateSkillContent() {
+    if (!selectedSession || selectedMessages.length === 0) {
+      return
+    }
+
+    const trimmedSkillName = skillName.trim()
+    const trimmedSkillDescription = skillDescription.trim()
+
+    if (!trimmedSkillName) {
+      setSkillGenerationError('请先填写 skill name。')
+      return
+    }
+
+    if (!trimmedSkillDescription) {
+      setSkillGenerationError('请先填写 skill description。')
+      return
+    }
+
+    setIsGeneratingSkill(true)
+    setSkillGenerationError('')
+
+    try {
+      const response = await fetch('/api/skills/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: trimmedSkillName,
+          description: trimmedSkillDescription,
+          sessionTitle: selectedSession.title,
+          sessionKey: selectedSession.sessionKey,
+          selectedMessages,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        content?: string
+        error?: string
+      }
+
+      if (!response.ok || !result.content) {
+        throw new Error(result.error || '生成失败。')
+      }
+
+      handleGeneratedSkillContentChange(result.content)
+    } catch (error) {
+      setSkillGenerationError(error instanceof Error ? error.message : '生成失败。')
+    } finally {
+      setIsGeneratingSkill(false)
+    }
   }
 
   return (
@@ -241,7 +388,7 @@ export default function SessionsWorkspace({
                 <span>{formatTimestamp(selectedSession.startedAt)}</span>
               </div>
 
-              {!messagesError && messages.length > 0 ? (
+              {!messagesError && messages.length > 0 && !hasRequestedSkillCreation ? (
                 <div className="mt-4 flex flex-wrap items-center gap-2 border border-black p-2 text-xs">
                   <button
                     type="button"
@@ -268,8 +415,15 @@ export default function SessionsWorkspace({
               ) : null}
 
               {hasRequestedSkillCreation && selectedCount > 0 ? (
-                <div className="mt-3 border border-black bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-                  已准备基于选中的 {selectedCount} 条记录进入 Skill Editor。下一步接入名称、描述与内容生成。
+                <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-neutral-50 p-2 text-xs text-neutral-600">
+                  <span>基于已选 {selectedCount} 条记录创建 Skill</span>
+                  <button
+                    type="button"
+                    onClick={handleBackToTimeline}
+                    className="border border-black px-3 py-1.5 text-black transition-colors hover:bg-neutral-100"
+                  >
+                    Back to Timeline
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -283,6 +437,80 @@ export default function SessionsWorkspace({
             ) : messages.length === 0 ? (
               <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-10 text-center text-neutral-500">
                 该会话里还没有可展示的 user / assistant 文本消息。
+              </div>
+            ) : hasRequestedSkillCreation && selectedCount > 0 ? (
+              <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
+                <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+                  <section className="border border-black p-4 sm:p-5">
+                    <div className="flex flex-col gap-2">
+                      <h3 className="text-sm font-medium tracking-[-0.02em]">Skill Editor</h3>
+                      <p className="text-sm text-neutral-600">
+                        已隐藏原始时间线。填写 `name` 和 `description` 后，可直接基于已选记录生成完整 SKILL 内容。
+                      </p>
+                    </div>
+
+                    <div className="mt-5 grid gap-4">
+                      <label className="grid gap-2 text-sm">
+                        <span className="font-medium">name</span>
+                        <input
+                          type="text"
+                          value={skillName}
+                          onChange={(event) => handleSkillNameChange(event.target.value)}
+                          placeholder="例如：extract-skill-from-chat"
+                          className="w-full border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                        />
+                      </label>
+
+                      <label className="grid gap-2 text-sm">
+                        <span className="font-medium">description</span>
+                        <textarea
+                          value={skillDescription}
+                          onChange={(event) => handleSkillDescriptionChange(event.target.value)}
+                          placeholder="简要描述这个 skill 解决什么问题、适用于什么场景。"
+                          rows={6}
+                          className="app-scrollbar min-h-36 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap items-center gap-2 border border-black bg-neutral-50 p-3 text-sm">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleGenerateSkillContent()
+                        }}
+                        disabled={isGeneratingSkill}
+                        className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                      >
+                        {isGeneratingSkill ? 'Generating...' : 'Generate Skill Content'}
+                      </button>
+                      <span className="text-neutral-500">将基于当前选中的 {selectedCount} 条时间线记录生成。</span>
+                    </div>
+
+                    {skillGenerationError ? (
+                      <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">
+                        {skillGenerationError}
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <section className="border border-black p-4 sm:p-5">
+                    <div className="flex flex-col gap-2">
+                      <h3 className="text-sm font-medium tracking-[-0.02em]">Generated Content</h3>
+                      <p className="text-sm text-neutral-600">
+                        生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。
+                      </p>
+                    </div>
+
+                    <textarea
+                      value={generatedSkillContent}
+                      onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
+                      placeholder="生成结果会出现在这里。"
+                      rows={18}
+                      className="app-scrollbar mt-5 min-h-80 w-full resize-y border border-black px-3 py-2 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                    />
+                  </section>
+                </div>
               </div>
             ) : (
               <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">

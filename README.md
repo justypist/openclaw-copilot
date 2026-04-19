@@ -5,9 +5,9 @@
 - [x] 可以通过鼠标选择其中一个会话，列出该会话的聊天记录
 - [x] 可以选择其中某些聊天记录，或者选择全部
 - [x] 选择记录后出现一个按钮 “Create Skill”
-  - [ ] 点击后隐藏聊天记录, 出现两个输入框，分别是 name description
-  - [ ] 输入后可以点击按钮 “Generate Skill Content”, 让AI生成完整的SKILL内容
-  - [ ] 生成后用户可以在 textarea 中对生成的内容进行编辑
+  - [x] 点击后隐藏聊天记录, 出现两个输入框，分别是 name description
+  - [x] 输入后可以点击按钮 “Generate Skill Content”, 让AI生成完整的SKILL内容
+  - [x] 生成后用户可以在 textarea 中对生成的内容进行编辑
   - [ ] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
   - [ ] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
   - [ ] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
@@ -17,14 +17,21 @@
 
 ## 当前实现状态
 
-- 已完成第 1 步、第 2 步，以及“选择某些聊天记录 / 全选 + Create Skill 入口”。
+- 已完成第 1 步、第 2 步，以及 `Create Skill` 的首轮编辑流。
 - 当前首页已经是“两栏工作台”：
   - 左侧按 `updatedAt` 倒序展示全部会话。
   - 右侧展示当前选中会话的完整时间线。
 - 当前 UI 已收敛为黑白直角风格，左右两栏均为固定高度内部滚动。
 - 当前右侧不再只展示普通文本消息，而是尽量保留完整会话上下文，便于后续做 skill 总结。
 - 当前右侧时间线已支持逐条勾选、全选、清空选择，并在有选择时显示 `Create Skill` 按钮。
-- 当前 `Create Skill` 已作为真实入口保留状态，下一步应进入“点击后隐藏聊天记录，出现 name / description 输入框”。
+- 当前点击 `Create Skill` 后会切换到 `Skill Editor`，隐藏原始时间线并保留当前选择。
+- 当前 `Skill Editor` 已支持：
+  - 编辑 `name`
+  - 编辑 `description`
+  - 点击 `Generate Skill Content`
+  - 调用 AI 基于已选时间线记录生成完整 SKILL 内容
+  - 在下方 textarea 中继续手动编辑生成结果
+  - 点击 `Back to Timeline` 返回时间线继续调整勾选
 
 ## 已实现文件
 
@@ -41,7 +48,12 @@
 - `app/_components/sessions-workspace.tsx`
   - 当前首页的 Client Component 工作台。
   - 负责左侧点击切换会话、右侧展示完整时间线。
-  - 已支持时间线记录多选 / 全选 / 清空选择，以及 `Create Skill` 入口展示。
+  - 已支持时间线记录多选 / 全选 / 清空选择。
+  - 已支持 `Create Skill` 编辑态、`name/description` 输入、内容生成、textarea 编辑与返回时间线。
+- `app/api/skills/generate/route.ts`
+  - 新增服务端生成接口。
+  - 接收 skill 基础信息与已选时间线记录。
+  - 调用 AI 生成完整 SKILL 内容并返回给前端编辑区。
 - `app/layout.tsx`
   - 已切换为 Geist / Geist Mono 字体。
 - `app/globals.css`
@@ -111,14 +123,14 @@
 
 ## 下一步建议
 
-- 进入 `Create Skill` 后切换到编辑态，先隐藏聊天记录区。
-- 展示两个输入框：`name` 和 `description`。
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
-- 这样后续生成 skill 时，AI 仍然可以同时参考：
+- 当前已具备完整生成与手动编辑链路；下一步优先补“选中某段内容 + 输入修改意见 + 仅重写选中部分”。
+- 这样后续生成 / 修改 skill 时，AI 仍然可以同时参考：
   - 用户原始需求
   - assistant 的处理过程
   - tool call / tool result
   - 其他上下文事件
+- 之后再接“最终拆分成 SKILL 标准格式”和“保存到 available-skills”。
 - 数据读取仍尽量继续放在服务端；选择态与交互态放在 Client Component。
 
 ## 已验证
