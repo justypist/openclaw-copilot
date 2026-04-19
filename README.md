@@ -14,9 +14,10 @@
 - [x] 再提供一个页面用于展示 available-skills enabled-skills
   - [x] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
   - [x] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
-- [ ] 优化 skill editor
-  - [ ] 选中文本弹窗形式修改，而不是在下方出现一个输入框
-  - [ ] 优化skill结束流程，目前有冗余
+- [x] 优化 skill editor
+  - [x] 选中文本弹窗形式修改，而不是在下方出现一个输入框
+  - [x] 优化skill结束流程，目前有冗余
+  - [x] 最后保存时，添加一个按钮，用于直接保存，而不再经过LLM进行拆分
 - [ ] 支持下载skill
 - [ ] 修改enabled skills目录， ${OPENCLAW_ROOT}/workspace/skills
 
@@ -36,17 +37,20 @@
   - 点击 `Generate Skill Content`
   - 调用 AI 基于已选时间线记录生成完整 SKILL 内容
   - 在下方 textarea 中继续手动编辑生成结果
-  - 在 textarea 中选中某段内容，填写修改意见，并调用 AI 只重写该选中片段
+  - 在 textarea 中选中某段内容后弹出修改窗口，填写修改意见，并调用 AI 只重写该选中片段
   - 点击 `Finalize Skill Files` 让 AI 产出最终 skill 文件集合，默认至少包含 `SKILL.md`
+  - 支持跳过定稿拆分，直接将当前编辑内容保存为单个 `SKILL.md`
   - 预览最终将保存的全部文件内容
   - 点击 `Save to available-skills` 写入 `config.openclaw.root/available-skills/<folderName>`
+  - 保存成功后可直接完成并返回时间线，或跳转到 `Skills Library`
   - 点击 `Back to Timeline` 返回时间线继续调整勾选
 - 当前已新增 `Skills Library` 页面：
   - 展示 `available-skills` 与 `enabled-skills`
   - 支持分别多选 skill 目录
   - 支持把选中的 skill 在两个目录之间整目录转移
   - 支持跨 `available/enabled` 多选多个 skills 后进入 `Merge Skill` 编辑流
-  - 合并流支持：生成合并草稿、选区局部改写、定稿拆分、保存到 `available-skills`
+  - 合并流支持：生成合并草稿、弹窗式选区局部改写、定稿拆分或直接保存单个 `SKILL.md` 到 `available-skills`
+  - 合并保存成功后可直接返回 `Skills Library`
   - 首页顶部可直接跳转到该页面
 
 ## 已实现文件

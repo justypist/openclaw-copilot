@@ -7,6 +7,8 @@ import { useRouter } from 'next/navigation'
 
 import type { FinalizedSkillDraft, SkillFileDraft, SkillLocation, SkillSummary } from '@/lib/skills'
 
+import SelectionRewriteDialog from './selection-rewrite-dialog'
+
 interface SkillsWorkspaceProps {
   availableSkills: SkillSummary[]
   enabledSkills: SkillSummary[]
@@ -210,15 +212,19 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     setSavedSkillDirectory('')
   }
 
+  function clearSelectedFragment() {
+    setSkillContentSelection(null)
+    setSelectionRewriteInstruction('')
+    setSelectionRewriteError('')
+  }
+
   function resetMergeEditorState() {
     setSkillName('')
     setSkillDescription('')
     setGeneratedSkillContent('')
     setIsGeneratingSkill(false)
     setSkillGenerationError('')
-    setSkillContentSelection(null)
-    setSelectionRewriteInstruction('')
-    setSelectionRewriteError('')
+    clearSelectedFragment()
     setIsRewritingSelection(false)
     resetFinalizedSkillState()
   }
@@ -260,17 +266,12 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     resetFinalizedSkillState()
     setGeneratedSkillContent(nextValue)
 
-    setSkillContentSelection((currentSelection) => {
-      if (!currentSelection) {
-        return null
-      }
-
-      if (nextValue.slice(currentSelection.start, currentSelection.end) !== currentSelection.text) {
-        return null
-      }
-
-      return currentSelection
-    })
+    if (
+      skillContentSelection &&
+      nextValue.slice(skillContentSelection.start, skillContentSelection.end) !== skillContentSelection.text
+    ) {
+      clearSelectedFragment()
+    }
   }
 
   function handleGeneratedContentSelection() {
@@ -284,16 +285,14 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     const selectionEnd = textarea.selectionEnd
 
     if (selectionStart === selectionEnd) {
-      setSkillContentSelection(null)
-      setSelectionRewriteError('')
+      clearSelectedFragment()
       return
     }
 
     const selectedText = textarea.value.slice(selectionStart, selectionEnd)
 
     if (!selectedText.trim()) {
-      setSkillContentSelection(null)
-      setSelectionRewriteError('')
+      clearSelectedFragment()
       return
     }
 
@@ -317,17 +316,20 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     setMoveError('')
     setMoveSummary('')
     setSkillGenerationError('')
-    setSelectionRewriteError('')
+    clearSelectedFragment()
     setSkillFinalizeError('')
     setSkillSaveError('')
   }
 
   function handleBackToLibrary() {
     setHasRequestedMerge(false)
-    setSkillContentSelection(null)
-    setSelectionRewriteInstruction('')
-    setSelectionRewriteError('')
+    clearSelectedFragment()
     setSkillGenerationError('')
+  }
+
+  function handleFinishMergeFlow() {
+    resetMergeEditorState()
+    setHasRequestedMerge(false)
   }
 
   async function handleMoveSkills(from: SkillLocation) {
@@ -429,8 +431,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       }
 
       handleGeneratedSkillContentChange(result.content)
-      setSkillContentSelection(null)
-      setSelectionRewriteInstruction('')
+      clearSelectedFragment()
     } catch (error) {
       setSkillGenerationError(error instanceof Error ? error.message : '合并失败。')
     } finally {
@@ -457,7 +458,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
     if (currentSelectedText !== skillContentSelection.text) {
       setSelectionRewriteError('当前选区已经变化，请重新选择要修改的内容。')
-      setSkillContentSelection(null)
       return
     }
 
@@ -504,12 +504,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       const nextSelectionStart = skillContentSelection.start
       const nextSelectionEnd = skillContentSelection.start + result.replacement.length
 
-      setSkillContentSelection({
-        start: nextSelectionStart,
-        end: nextSelectionEnd,
-        text: result.replacement,
-      })
-      setSelectionRewriteInstruction('')
+      clearSelectedFragment()
 
       window.requestAnimationFrame(() => {
         const textarea = generatedSkillContentRef.current
@@ -599,11 +594,38 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     }
   }
 
-  async function handleSaveSkill() {
-    if (!finalizedSkill) {
-      return
+  function buildDirectSaveDraft(): FinalizedSkillDraft | null {
+    const trimmedSkillName = skillName.trim()
+    const trimmedSkillDescription = skillDescription.trim()
+    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+
+    if (!trimmedSkillName) {
+      setSkillFinalizeError('请先填写 skill name。')
+      return null
     }
 
+    if (!trimmedSkillDescription) {
+      setSkillFinalizeError('请先填写 skill description。')
+      return null
+    }
+
+    if (!trimmedGeneratedSkillContent) {
+      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
+      return null
+    }
+
+    return {
+      folderName: trimmedSkillName,
+      files: [
+        {
+          path: 'SKILL.md',
+          content: trimmedGeneratedSkillContent,
+        },
+      ],
+    }
+  }
+
+  async function saveSkillDraft(draft: FinalizedSkillDraft) {
     setIsSavingSkill(true)
     setSkillSaveError('')
     setSavedSkillDirectory('')
@@ -614,7 +636,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(finalizedSkill),
+        body: JSON.stringify(draft),
       })
 
       const result = (await response.json()) as {
@@ -636,6 +658,26 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     } finally {
       setIsSavingSkill(false)
     }
+  }
+
+  async function handleSaveSkill() {
+    if (!finalizedSkill) {
+      return
+    }
+
+    await saveSkillDraft(finalizedSkill)
+  }
+
+  async function handleDirectSaveSkill() {
+    const draft = buildDirectSaveDraft()
+
+    if (!draft) {
+      return
+    }
+
+    setSkillFinalizeError('')
+    setFinalizedSkill(draft)
+    await saveSkillDraft(draft)
   }
 
   return (
@@ -786,74 +828,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
             <div className="mt-4 border border-black bg-neutral-50 p-4">
               <div className="flex flex-col gap-2">
-                <h4 className="text-sm font-medium">Selected Fragment Rewrite</h4>
-                <p className="text-sm text-neutral-600">
-                  在上方选中一段文本后，输入修改意见，AI 只会返回该选中片段的替换内容。
-                </p>
-              </div>
-
-              {skillContentSelection ? (
-                <div className="mt-4 grid gap-4">
-                  <div className="border border-black bg-white p-3">
-                    <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                      <span>selected</span>
-                      <span>{skillContentSelection.text.length} chars</span>
-                    </div>
-                    <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-                      {skillContentSelection.text}
-                    </pre>
-                  </div>
-
-                  <label className="grid gap-2 text-sm">
-                    <span className="font-medium">修改意见</span>
-                    <textarea
-                      value={selectionRewriteInstruction}
-                      onChange={(event) => setSelectionRewriteInstruction(event.target.value)}
-                      placeholder="例如：保留原意，但把重复步骤合并成更清晰的说明。"
-                      rows={4}
-                      className="app-scrollbar min-h-24 w-full resize-y border border-black bg-white px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-                    />
-                  </label>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleRewriteSelection()
-                      }}
-                      disabled={isRewritingSelection}
-                      className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                    >
-                      {isRewritingSelection ? 'Rewriting...' : 'Rewrite Selection'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSkillContentSelection(null)
-                        setSelectionRewriteInstruction('')
-                        setSelectionRewriteError('')
-                      }}
-                      className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
-                    >
-                      Clear Selected Fragment
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 border border-dashed border-black bg-white px-3 py-4 text-sm text-neutral-500">
-                  先在上方 textarea 中选中要修改的片段。
-                </div>
-              )}
-
-              {selectionRewriteError ? (
-                <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
-                  {selectionRewriteError}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mt-4 border border-black bg-neutral-50 p-4">
-              <div className="flex flex-col gap-2">
                 <h4 className="text-sm font-medium">Finalize & Save</h4>
                 <p className="text-sm text-neutral-600">
                   修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
@@ -871,19 +845,35 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
                 >
                   {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleDirectSaveSkill()
+                  }}
+                  disabled={isSavingSkill}
+                  className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+                >
+                  {isSavingSkill ? 'Saving...' : 'Direct Save as SKILL.md'}
+                </button>
 
                 {finalizedSkill ? (
                   <span className="text-sm text-neutral-500">
                     目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
                   </span>
                 ) : (
-                  <span className="text-sm text-neutral-500">尚未生成最终文件集合。</span>
+                  <span className="text-sm text-neutral-500">可先定稿拆分，也可直接把当前内容保存为 `SKILL.md`。</span>
                 )}
               </div>
 
               {skillFinalizeError ? (
                 <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
                   {skillFinalizeError}
+                </div>
+              ) : null}
+
+              {skillSaveError ? (
+                <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                  {skillSaveError}
                 </div>
               ) : null}
 
@@ -902,35 +892,55 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
                   ))}
 
                   <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void handleSaveSkill()
-                      }}
-                      disabled={isSavingSkill}
-                      className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                    >
-                      {isSavingSkill ? 'Saving...' : 'Save to available-skills'}
-                    </button>
-
                     {savedSkillDirectory ? (
-                      <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                      <>
+                        <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                        <button
+                          type="button"
+                          onClick={handleFinishMergeFlow}
+                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                        >
+                          完成并返回列表
+                        </button>
+                      </>
                     ) : (
-                      <span className="text-sm text-neutral-500">
-                        将写入 `config.openclaw.root/available-skills/{finalizedSkill.folderName}`
-                      </span>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleSaveSkill()
+                          }}
+                          disabled={isSavingSkill}
+                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                        >
+                          {isSavingSkill ? 'Saving...' : 'Save to available-skills'}
+                        </button>
+                        <span className="text-sm text-neutral-500">
+                          将写入 `config.openclaw.root/available-skills/{finalizedSkill.folderName}`
+                        </span>
+                      </>
                     )}
                   </div>
 
-                  {skillSaveError ? (
-                    <div className="border border-black bg-white px-3 py-2 text-sm text-black">
-                      {skillSaveError}
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
             </div>
           </section>
+          <SelectionRewriteDialog
+            selection={skillContentSelection}
+            instruction={selectionRewriteInstruction}
+            error={selectionRewriteError}
+            isSubmitting={isRewritingSelection}
+            title="Selected Fragment Rewrite"
+            description="基于当前选区和源 skills 上下文填写修改意见，AI 只会返回当前片段的替换内容。"
+            placeholder="例如：保留原意，但把重复步骤合并成更清晰的说明。"
+            submitLabel="Rewrite Selection"
+            onInstructionChange={setSelectionRewriteInstruction}
+            onClose={clearSelectedFragment}
+            onSubmit={() => {
+              void handleRewriteSelection()
+            }}
+          />
         </div>
       ) : (
         <section className="grid gap-4 lg:grid-cols-2">
