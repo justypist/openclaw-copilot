@@ -14,6 +14,11 @@
 - [x] 再提供一个页面用于展示 available-skills enabled-skills
   - [x] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
   - [x] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
+- [ ] 优化 skill editor
+  - [ ] 选中文本弹窗形式修改，而不是在下方出现一个输入框
+  - [ ] 优化skill结束流程，目前有冗余
+- [ ] 支持下载skill
+- [ ] 修改enabled skills目录， ${OPENCLAW_ROOT}/workspace/skills
 
 ## 当前实现状态
 
