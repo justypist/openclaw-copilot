@@ -1,6 +1,6 @@
 'use client'
 
-import { useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 
 import { usePathname, useRouter } from 'next/navigation'
 
@@ -12,6 +12,14 @@ interface SessionsWorkspaceProps {
   messages: SessionMessage[]
   messagesError?: string
 }
+
+interface SelectionState {
+  sessionId: string
+  selectedMessageKeys: string[]
+  hasRequestedSkillCreation: boolean
+}
+
+const EMPTY_MESSAGE_KEYS: string[] = []
 
 function formatTimestamp(timestamp: number | undefined): string {
   if (!timestamp) {
@@ -48,6 +56,10 @@ function getItemLabel(message: SessionMessage): string {
   return message.role
 }
 
+function getMessageKey(message: SessionMessage): string {
+  return `${message.id}-${message.timestamp ?? 'unknown'}`
+}
+
 export default function SessionsWorkspace({
   sessions,
   selectedSession,
@@ -57,6 +69,26 @@ export default function SessionsWorkspace({
   const router = useRouter()
   const pathname = usePathname()
   const [isPending, startTransition] = useTransition()
+  const activeSessionId = selectedSession?.sessionId ?? ''
+  const [selectionState, setSelectionState] = useState<SelectionState>({
+    sessionId: activeSessionId,
+    selectedMessageKeys: [],
+    hasRequestedSkillCreation: false,
+  })
+  const selectedMessageKeys =
+    selectionState.sessionId === activeSessionId
+      ? selectionState.selectedMessageKeys
+      : EMPTY_MESSAGE_KEYS
+  const hasRequestedSkillCreation =
+    selectionState.sessionId === activeSessionId ? selectionState.hasRequestedSkillCreation : false
+
+  const selectableMessageKeys = useMemo(() => messages.map(getMessageKey), [messages])
+  const selectedMessageKeySet = useMemo(
+    () => new Set(selectedMessageKeys),
+    [selectedMessageKeys],
+  )
+  const selectedCount = selectedMessageKeys.length
+  const allSelected = selectableMessageKeys.length > 0 && selectedCount === selectableMessageKeys.length
 
   function handleSelectSession(sessionId: string) {
     if (!sessionId || sessionId === selectedSession?.sessionId) {
@@ -65,6 +97,53 @@ export default function SessionsWorkspace({
 
     startTransition(() => {
       router.push(`${pathname}?session=${encodeURIComponent(sessionId)}`)
+    })
+  }
+
+  function handleToggleMessage(messageKey: string) {
+    setSelectionState((currentState) => {
+      const currentKeys =
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : []
+
+      if (currentKeys.includes(messageKey)) {
+        return {
+          sessionId: activeSessionId,
+          selectedMessageKeys: currentKeys.filter((key) => key !== messageKey),
+          hasRequestedSkillCreation:
+            currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+        }
+      }
+
+      return {
+        sessionId: activeSessionId,
+        selectedMessageKeys: [...currentKeys, messageKey],
+        hasRequestedSkillCreation:
+          currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      }
+    })
+  }
+
+  function handleSelectAll() {
+    setSelectionState({
+      sessionId: activeSessionId,
+      selectedMessageKeys: selectableMessageKeys,
+      hasRequestedSkillCreation,
+    })
+  }
+
+  function handleClearSelection() {
+    setSelectionState({
+      sessionId: activeSessionId,
+      selectedMessageKeys: [],
+      hasRequestedSkillCreation: false,
+    })
+  }
+
+  function handleCreateSkill() {
+    setSelectionState({
+      sessionId: activeSessionId,
+      selectedMessageKeys,
+      hasRequestedSkillCreation: true,
     })
   }
 
@@ -161,6 +240,38 @@ export default function SessionsWorkspace({
                 <span>{selectedSession.model ?? 'unknown'}</span>
                 <span>{formatTimestamp(selectedSession.startedAt)}</span>
               </div>
+
+              {!messagesError && messages.length > 0 ? (
+                <div className="mt-4 flex flex-wrap items-center gap-2 border border-black p-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={allSelected ? handleClearSelection : handleSelectAll}
+                    className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+                  >
+                    {allSelected ? 'Clear selection' : 'Select all'}
+                  </button>
+
+                  <span className="text-neutral-500">
+                    {selectedCount === 0 ? '未选择记录' : `已选择 ${selectedCount} / ${messages.length}`}
+                  </span>
+
+                  {selectedCount > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleCreateSkill}
+                      className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                    >
+                      Create Skill
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {hasRequestedSkillCreation && selectedCount > 0 ? (
+                <div className="mt-3 border border-black bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
+                  已准备基于选中的 {selectedCount} 条记录进入 Skill Editor。下一步接入名称、描述与内容生成。
+                </div>
+              ) : null}
             </div>
 
             {messagesError ? (
@@ -176,81 +287,101 @@ export default function SessionsWorkspace({
             ) : (
               <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
                 <div className="grid gap-3">
-                {messages.map((message) => {
-                  const isUser = message.role === 'user'
-                  const isAssistant = message.role === 'assistant'
-                  const isThinking = message.role === 'thinking'
-                  const isStructured = !isUser && !isAssistant && !isThinking
+                  {messages.map((message) => {
+                    const messageKey = getMessageKey(message)
+                    const isChecked = selectedMessageKeySet.has(messageKey)
+                    const isUser = message.role === 'user'
+                    const isAssistant = message.role === 'assistant'
+                    const isThinking = message.role === 'thinking'
+                    const isStructured = !isUser && !isAssistant && !isThinking
 
-                  return (
-                    <article
-                      key={`${message.id}-${message.timestamp ?? 'unknown'}`}
-                      className={isUser ? 'flex min-w-0 justify-end' : 'flex min-w-0 justify-start'}
-                    >
-                      <div
-                        className={[
-                          'w-full max-w-3xl overflow-hidden border px-4 py-4 sm:px-5',
-                          isStructured
-                            ? message.isError
-                              ? 'border-black bg-neutral-100 text-black'
-                              : 'border-black bg-neutral-50 text-black'
-                            : isUser
-                            ? 'border-black bg-black text-white'
-                            : isThinking
-                            ? 'border-black bg-neutral-100 text-black'
-                            : 'border-black bg-white text-black',
-                        ].join(' ')}
+                    return (
+                      <article
+                        key={messageKey}
+                        className={isUser ? 'flex min-w-0 justify-end' : 'flex min-w-0 justify-start'}
                       >
                         <div
                           className={[
-                            'flex items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em]',
-                            isStructured || isThinking
-                              ? 'text-neutral-500'
-                              : isUser
-                              ? 'text-neutral-400'
-                              : 'text-neutral-500',
+                            'flex min-w-0 max-w-full items-start gap-3',
+                            isUser ? 'flex-row-reverse' : 'flex-row',
                           ].join(' ')}
                         >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <span>{getItemLabel(message)}</span>
-                            {message.toolName ? (
-                              <span className="truncate font-mono normal-case tracking-normal">
-                                {message.toolName}
-                              </span>
+                          <label className="mt-3 flex shrink-0 cursor-pointer items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleToggleMessage(messageKey)}
+                              className="h-4 w-4 rounded-none border-black text-black accent-black"
+                            />
+                            <span className="sr-only">选择当前记录</span>
+                          </label>
+
+                          <div
+                            className={[
+                              'w-full max-w-3xl overflow-hidden border px-4 py-4 transition-colors sm:px-5',
+                              isStructured
+                                ? message.isError
+                                  ? 'border-black bg-neutral-100 text-black'
+                                  : 'border-black bg-neutral-50 text-black'
+                                : isUser
+                                ? 'border-black bg-black text-white'
+                                : isThinking
+                                ? 'border-black bg-neutral-100 text-black'
+                                : 'border-black bg-white text-black',
+                              isChecked ? 'ring-1 ring-black' : '',
+                            ].join(' ')}
+                          >
+                            <div
+                              className={[
+                                'flex items-center justify-between gap-4 text-[11px] uppercase tracking-[0.2em]',
+                                isStructured || isThinking
+                                  ? 'text-neutral-500'
+                                  : isUser
+                                  ? 'text-neutral-400'
+                                  : 'text-neutral-500',
+                              ].join(' ')}
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <span>{getItemLabel(message)}</span>
+                                {message.toolName ? (
+                                  <span className="truncate font-mono normal-case tracking-normal">
+                                    {message.toolName}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <time>{formatTimestamp(message.timestamp)}</time>
+                            </div>
+
+                            {message.toolCallId ? (
+                              <p className="mt-2 break-all font-mono text-[11px] text-neutral-500">
+                                {message.toolCallId}
+                              </p>
                             ) : null}
+
+                            {message.details ? (
+                              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-neutral-500">
+                                {message.details}
+                              </pre>
+                            ) : null}
+
+                            {isStructured ? (
+                              <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6">
+                                {message.text}
+                              </pre>
+                            ) : isThinking ? (
+                              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-neutral-700">
+                                {message.text}
+                              </p>
+                            ) : (
+                              <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">
+                                {message.text}
+                              </p>
+                            )}
                           </div>
-                          <time>{formatTimestamp(message.timestamp)}</time>
                         </div>
-
-                        {message.toolCallId ? (
-                          <p className="mt-2 break-all font-mono text-[11px] text-neutral-500">
-                            {message.toolCallId}
-                          </p>
-                        ) : null}
-
-                        {message.details ? (
-                          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-neutral-500">
-                            {message.details}
-                          </pre>
-                        ) : null}
-
-                        {isStructured ? (
-                          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6">
-                            {message.text}
-                          </pre>
-                        ) : isThinking ? (
-                          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7 text-neutral-700">
-                            {message.text}
-                          </p>
-                        ) : (
-                          <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">
-                            {message.text}
-                          </p>
-                        )}
-                      </div>
-                    </article>
-                  )
-                })}
+                      </article>
+                    )
+                  })}
                 </div>
               </div>
             )}
