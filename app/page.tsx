@@ -1,7 +1,7 @@
+import { connection } from 'next/server'
+
 import SessionsWorkspace from '@/app/_components/sessions-workspace'
 import { getSessionMessages, getSessionsOverview } from '@/lib/openclaw/sessions'
-
-export const dynamic = 'force-dynamic'
 
 interface HomePageProps {
   searchParams: Promise<{
@@ -29,6 +29,8 @@ function normalizeSessionParam(session: string | string[] | undefined): string |
 }
 
 export default async function Home({ searchParams }: HomePageProps) {
+  await connection()
+
   const overviewPromise = getSessionsOverview()
   const resolvedSearchParams = await searchParams
   const result = await overviewPromise

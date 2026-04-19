@@ -9,8 +9,8 @@
   - [x] 输入后可以点击按钮 “Generate Skill Content”, 让AI生成完整的SKILL内容
   - [x] 生成后用户可以在 textarea 中对生成的内容进行编辑
 - [x] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
-  - [ ] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
-  - [ ] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
+- [x] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
+- [x] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
 - [ ] 再提供一个页面用于展示 available-skills enabled-skills
   - [ ] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
   - [ ] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
@@ -32,6 +32,9 @@
   - 调用 AI 基于已选时间线记录生成完整 SKILL 内容
   - 在下方 textarea 中继续手动编辑生成结果
   - 在 textarea 中选中某段内容，填写修改意见，并调用 AI 只重写该选中片段
+  - 点击 `Finalize Skill Files` 让 AI 产出最终 skill 文件集合，默认至少包含 `SKILL.md`
+  - 预览最终将保存的全部文件内容
+  - 点击 `Save to available-skills` 写入 `config.openclaw.root/available-skills/<folderName>`
   - 点击 `Back to Timeline` 返回时间线继续调整勾选
 
 ## 已实现文件
@@ -59,6 +62,16 @@
   - 新增服务端局部改写接口。
   - 接收完整 skill、当前选中片段、修改意见与已选时间线记录。
   - 调用 AI 只返回选中片段的替换内容，再由前端原位替换。
+- `app/api/skills/finalize/route.ts`
+  - 新增服务端定稿接口。
+  - 接收当前完整 skill 草稿与已选时间线记录。
+  - 调用 AI 输出最终可保存的 skill 文件集合，至少包含 `SKILL.md`，必要时可拆分成多个文件。
+- `app/api/skills/save/route.ts`
+  - 新增服务端保存接口。
+  - 接收定稿后的 skill 文件集合并写入 `available-skills`。
+- `lib/skills.ts`
+  - 抽取 skill 相关公共逻辑。
+  - 包含时间线上下文格式化、文件路径校验、目录名规范化与写盘逻辑。
 - `app/layout.tsx`
   - 已切换为 Geist / Geist Mono 字体。
 - `app/globals.css`
@@ -130,7 +143,7 @@
 
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
 - 当前已具备完整生成、手动编辑、局部选区改写链路。
-- 下一步优先补“最终拆分成 SKILL 标准格式”和“保存到 available-skills”。
+- 下一步可继续补 `available-skills / enabled-skills` 管理页与多 skill 合并流。
 - 局部改写时，AI 仍然可以同时参考：
   - 用户原始需求
   - assistant 的处理过程
@@ -147,3 +160,4 @@
 
 - 当前未发现阻塞继续开发的问题。
 - README 早期提到的 `config.ts` / Edge Runtime 警告说明已过时：本轮 `pnpm build` 未出现该警告。
+- 当前 `pnpm build` 出现一条 Turbopack NFT warning，但不影响构建成功；当前功能已可运行，后续可再单独收敛该告警。

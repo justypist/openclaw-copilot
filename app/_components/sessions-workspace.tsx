@@ -28,6 +28,16 @@ interface SkillContentSelection {
   text: string
 }
 
+interface SkillFileDraft {
+  path: string
+  content: string
+}
+
+interface FinalizedSkillDraft {
+  folderName: string
+  files: SkillFileDraft[]
+}
+
 const EMPTY_MESSAGE_KEYS: string[] = []
 
 function formatTimestamp(timestamp: number | undefined): string {
@@ -105,6 +115,12 @@ export default function SessionsWorkspace({
   const [selectionRewriteInstruction, setSelectionRewriteInstruction] = useState('')
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
+  const [finalizedSkill, setFinalizedSkill] = useState<FinalizedSkillDraft | null>(null)
+  const [isFinalizingSkill, setIsFinalizingSkill] = useState(false)
+  const [skillFinalizeError, setSkillFinalizeError] = useState('')
+  const [isSavingSkill, setIsSavingSkill] = useState(false)
+  const [skillSaveError, setSkillSaveError] = useState('')
+  const [savedSkillDirectory, setSavedSkillDirectory] = useState('')
 
   const selectableMessageKeys = useMemo(() => messages.map(getMessageKey), [messages])
   const selectedMessageKeySet = useMemo(
@@ -118,6 +134,15 @@ export default function SessionsWorkspace({
   const selectedCount = selectedMessageKeys.length
   const allSelected = selectableMessageKeys.length > 0 && selectedCount === selectableMessageKeys.length
 
+  function resetFinalizedSkillState() {
+    setFinalizedSkill(null)
+    setIsFinalizingSkill(false)
+    setSkillFinalizeError('')
+    setIsSavingSkill(false)
+    setSkillSaveError('')
+    setSavedSkillDirectory('')
+  }
+
   function handleSelectSession(sessionId: string) {
     if (!sessionId || sessionId === selectedSession?.sessionId) {
       return
@@ -127,6 +152,7 @@ export default function SessionsWorkspace({
     setSelectionRewriteInstruction('')
     setSelectionRewriteError('')
     setIsRewritingSelection(false)
+    resetFinalizedSkillState()
 
     startTransition(() => {
       router.push(`${pathname}?session=${encodeURIComponent(sessionId)}`)
@@ -194,6 +220,7 @@ export default function SessionsWorkspace({
     setSelectionRewriteInstruction('')
     setSelectionRewriteError('')
     setIsRewritingSelection(false)
+    resetFinalizedSkillState()
   }
 
   function handleCreateSkill() {
@@ -223,6 +250,7 @@ export default function SessionsWorkspace({
   }
 
   function handleSkillNameChange(nextValue: string) {
+    resetFinalizedSkillState()
     setSelectionState((currentState) => ({
       sessionId: activeSessionId,
       selectedMessageKeys:
@@ -238,6 +266,7 @@ export default function SessionsWorkspace({
   }
 
   function handleSkillDescriptionChange(nextValue: string) {
+    resetFinalizedSkillState()
     setSelectionState((currentState) => ({
       sessionId: activeSessionId,
       selectedMessageKeys:
@@ -252,6 +281,7 @@ export default function SessionsWorkspace({
   }
 
   function handleGeneratedSkillContentChange(nextValue: string) {
+    resetFinalizedSkillState()
     setSelectionState((currentState) => ({
       sessionId: activeSessionId,
       selectedMessageKeys:
@@ -330,6 +360,7 @@ export default function SessionsWorkspace({
     setIsGeneratingSkill(true)
     setSkillGenerationError('')
     setSelectionRewriteError('')
+    resetFinalizedSkillState()
 
     try {
       const response = await fetch('/api/skills/generate', {
@@ -391,6 +422,9 @@ export default function SessionsWorkspace({
     setIsRewritingSelection(true)
     setSelectionRewriteError('')
     setSkillGenerationError('')
+    setSkillFinalizeError('')
+    setSkillSaveError('')
+    setSavedSkillDirectory('')
 
     try {
       const response = await fetch('/api/skills/rewrite-selection', {
@@ -451,6 +485,113 @@ export default function SessionsWorkspace({
       setSelectionRewriteError(error instanceof Error ? error.message : '局部修改失败。')
     } finally {
       setIsRewritingSelection(false)
+    }
+  }
+
+  async function handleFinalizeSkill() {
+    if (!selectedSession) {
+      return
+    }
+
+    const trimmedSkillName = skillName.trim()
+    const trimmedSkillDescription = skillDescription.trim()
+    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+
+    if (!trimmedSkillName) {
+      setSkillFinalizeError('请先填写 skill name。')
+      return
+    }
+
+    if (!trimmedSkillDescription) {
+      setSkillFinalizeError('请先填写 skill description。')
+      return
+    }
+
+    if (!trimmedGeneratedSkillContent) {
+      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
+      return
+    }
+
+    setIsFinalizingSkill(true)
+    setSkillFinalizeError('')
+    setSkillSaveError('')
+    setSavedSkillDirectory('')
+
+    try {
+      const response = await fetch('/api/skills/finalize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: trimmedSkillName,
+          description: trimmedSkillDescription,
+          sessionTitle: selectedSession.title,
+          sessionKey: selectedSession.sessionKey,
+          fullContent: trimmedGeneratedSkillContent,
+          selectedMessages,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        folderName?: string
+        files?: SkillFileDraft[]
+        error?: string
+      }
+
+      if (
+        !response.ok ||
+        typeof result.folderName !== 'string' ||
+        !Array.isArray(result.files) ||
+        result.files.length === 0
+      ) {
+        throw new Error(result.error || '定稿失败。')
+      }
+
+      setFinalizedSkill({
+        folderName: result.folderName,
+        files: result.files,
+      })
+    } catch (error) {
+      setSkillFinalizeError(error instanceof Error ? error.message : '定稿失败。')
+      setFinalizedSkill(null)
+    } finally {
+      setIsFinalizingSkill(false)
+    }
+  }
+
+  async function handleSaveSkill() {
+    if (!finalizedSkill) {
+      return
+    }
+
+    setIsSavingSkill(true)
+    setSkillSaveError('')
+    setSavedSkillDirectory('')
+
+    try {
+      const response = await fetch('/api/skills/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(finalizedSkill),
+      })
+
+      const result = (await response.json()) as {
+        skillDirectory?: string
+        error?: string
+      }
+
+      if (!response.ok || typeof result.skillDirectory !== 'string') {
+        throw new Error(result.error || '保存失败。')
+      }
+
+      setSavedSkillDirectory(result.skillDirectory)
+    } catch (error) {
+      setSkillSaveError(error instanceof Error ? error.message : '保存失败。')
+    } finally {
+      setIsSavingSkill(false)
     }
   }
 
@@ -674,7 +815,7 @@ export default function SessionsWorkspace({
                       className="app-scrollbar mt-5 min-h-80 w-full resize-y border border-black px-3 py-2 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
                     />
 
-                    <div className="mt-4 border border-black bg-neutral-50 p-4">
+                   <div className="mt-4 border border-black bg-neutral-50 p-4">
                       <div className="flex flex-col gap-2">
                         <h4 className="text-sm font-medium">Selected Fragment Rewrite</h4>
                         <p className="text-sm text-neutral-600">
@@ -738,6 +879,85 @@ export default function SessionsWorkspace({
                       {selectionRewriteError ? (
                         <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
                           {selectionRewriteError}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 border border-black bg-neutral-50 p-4">
+                      <div className="flex flex-col gap-2">
+                        <h4 className="text-sm font-medium">Finalize & Save</h4>
+                        <p className="text-sm text-neutral-600">
+                          修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
+                        </p>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleFinalizeSkill()
+                          }}
+                          disabled={isFinalizingSkill}
+                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                        >
+                          {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
+                        </button>
+
+                        {finalizedSkill ? (
+                          <span className="text-sm text-neutral-500">
+                            目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
+                          </span>
+                        ) : (
+                          <span className="text-sm text-neutral-500">尚未生成最终文件集合。</span>
+                        )}
+                      </div>
+
+                      {skillFinalizeError ? (
+                        <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                          {skillFinalizeError}
+                        </div>
+                      ) : null}
+
+                      {finalizedSkill ? (
+                        <div className="mt-4 grid gap-4">
+                          {finalizedSkill.files.map((file) => (
+                            <div key={file.path} className="border border-black bg-white p-3">
+                              <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                                <span>{file.path}</span>
+                                <span>{file.content.length} chars</span>
+                              </div>
+                              <pre className="app-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
+                                {file.content}
+                              </pre>
+                            </div>
+                          ))}
+
+                          <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleSaveSkill()
+                              }}
+                              disabled={isSavingSkill}
+                              className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                            >
+                              {isSavingSkill ? 'Saving...' : 'Save to available-skills'}
+                            </button>
+
+                            {savedSkillDirectory ? (
+                              <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                            ) : (
+                              <span className="text-sm text-neutral-500">
+                                将写入 `config.openclaw.root/available-skills/{finalizedSkill.folderName}`
+                              </span>
+                            )}
+                          </div>
+
+                          {skillSaveError ? (
+                            <div className="border border-black bg-white px-3 py-2 text-sm text-black">
+                              {skillSaveError}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

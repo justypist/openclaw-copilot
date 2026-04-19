@@ -1,8 +1,8 @@
 import { streamText } from 'ai'
+
 import { options } from '@/lib/ai'
 import type { SessionMessage } from '@/lib/openclaw/sessions'
-
-export const dynamic = 'force-dynamic'
+import { buildConversationContext } from '@/lib/skills'
 
 interface GenerateSkillRequestBody {
   name?: unknown
@@ -18,38 +18,6 @@ function isSessionMessageArray(value: unknown): value is SessionMessage[] {
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function formatMessage(message: SessionMessage, index: number): string {
-  const lines = [`## Entry ${index + 1}`]
-
-  lines.push(`- role: ${message.role}`)
-
-  if (message.label) {
-    lines.push(`- label: ${message.label}`)
-  }
-
-  if (message.timestamp) {
-    lines.push(`- timestamp: ${new Date(message.timestamp).toISOString()}`)
-  }
-
-  if (message.toolName) {
-    lines.push(`- toolName: ${message.toolName}`)
-  }
-
-  if (message.toolCallId) {
-    lines.push(`- toolCallId: ${message.toolCallId}`)
-  }
-
-  if (message.details) {
-    lines.push(`- details: ${message.details}`)
-  }
-
-  lines.push('```text')
-  lines.push(message.text || '(empty)')
-  lines.push('```')
-
-  return lines.join('\n')
 }
 
 export async function POST(request: Request) {
@@ -79,7 +47,7 @@ export async function POST(request: Request) {
   }
 
   const selectedMessages = body.selectedMessages
-  const conversationContext = selectedMessages.map(formatMessage).join('\n\n')
+  const conversationContext = buildConversationContext(selectedMessages)
 
   try {
     const { text } = streamText({
