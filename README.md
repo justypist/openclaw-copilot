@@ -8,7 +8,7 @@
   - [x] 点击后隐藏聊天记录, 出现两个输入框，分别是 name description
   - [x] 输入后可以点击按钮 “Generate Skill Content”, 让AI生成完整的SKILL内容
   - [x] 生成后用户可以在 textarea 中对生成的内容进行编辑
-  - [ ] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
+- [x] 也可以选中一段话，弹出一个输入框，输入修改意见，让AI结合上下文以及选中的内容以及修改意见，只修改选中的部分
   - [ ] 修改满意后，点击最下方的按钮，调用AI对SKILL进行合理拆分，拆分成SKILL标准格式，如果SKILL很小也可以不拆分
   - [ ] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
 - [ ] 再提供一个页面用于展示 available-skills enabled-skills
@@ -31,6 +31,7 @@
   - 点击 `Generate Skill Content`
   - 调用 AI 基于已选时间线记录生成完整 SKILL 内容
   - 在下方 textarea 中继续手动编辑生成结果
+  - 在 textarea 中选中某段内容，填写修改意见，并调用 AI 只重写该选中片段
   - 点击 `Back to Timeline` 返回时间线继续调整勾选
 
 ## 已实现文件
@@ -54,6 +55,10 @@
   - 新增服务端生成接口。
   - 接收 skill 基础信息与已选时间线记录。
   - 调用 AI 生成完整 SKILL 内容并返回给前端编辑区。
+- `app/api/skills/rewrite-selection/route.ts`
+  - 新增服务端局部改写接口。
+  - 接收完整 skill、当前选中片段、修改意见与已选时间线记录。
+  - 调用 AI 只返回选中片段的替换内容，再由前端原位替换。
 - `app/layout.tsx`
   - 已切换为 Geist / Geist Mono 字体。
 - `app/globals.css`
@@ -124,13 +129,13 @@
 ## 下一步建议
 
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
-- 当前已具备完整生成与手动编辑链路；下一步优先补“选中某段内容 + 输入修改意见 + 仅重写选中部分”。
-- 这样后续生成 / 修改 skill 时，AI 仍然可以同时参考：
+- 当前已具备完整生成、手动编辑、局部选区改写链路。
+- 下一步优先补“最终拆分成 SKILL 标准格式”和“保存到 available-skills”。
+- 局部改写时，AI 仍然可以同时参考：
   - 用户原始需求
   - assistant 的处理过程
   - tool call / tool result
   - 其他上下文事件
-- 之后再接“最终拆分成 SKILL 标准格式”和“保存到 available-skills”。
 - 数据读取仍尽量继续放在服务端；选择态与交互态放在 Client Component。
 
 ## 已验证

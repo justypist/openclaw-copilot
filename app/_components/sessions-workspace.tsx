@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useRef, useState, useTransition } from 'react'
 
 import { usePathname, useRouter } from 'next/navigation'
 
@@ -20,6 +20,12 @@ interface SelectionState {
   skillName: string
   skillDescription: string
   generatedSkillContent: string
+}
+
+interface SkillContentSelection {
+  start: number
+  end: number
+  text: string
 }
 
 const EMPTY_MESSAGE_KEYS: string[] = []
@@ -71,6 +77,7 @@ export default function SessionsWorkspace({
 }: SessionsWorkspaceProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
   const [isPending, startTransition] = useTransition()
   const activeSessionId = selectedSession?.sessionId ?? ''
   const [selectionState, setSelectionState] = useState<SelectionState>({
@@ -94,6 +101,10 @@ export default function SessionsWorkspace({
     selectionState.sessionId === activeSessionId ? selectionState.generatedSkillContent : ''
   const [isGeneratingSkill, setIsGeneratingSkill] = useState(false)
   const [skillGenerationError, setSkillGenerationError] = useState('')
+  const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
+  const [selectionRewriteInstruction, setSelectionRewriteInstruction] = useState('')
+  const [selectionRewriteError, setSelectionRewriteError] = useState('')
+  const [isRewritingSelection, setIsRewritingSelection] = useState(false)
 
   const selectableMessageKeys = useMemo(() => messages.map(getMessageKey), [messages])
   const selectedMessageKeySet = useMemo(
@@ -111,6 +122,11 @@ export default function SessionsWorkspace({
     if (!sessionId || sessionId === selectedSession?.sessionId) {
       return
     }
+
+    setSkillContentSelection(null)
+    setSelectionRewriteInstruction('')
+    setSelectionRewriteError('')
+    setIsRewritingSelection(false)
 
     startTransition(() => {
       router.push(`${pathname}?session=${encodeURIComponent(sessionId)}`)
@@ -174,6 +190,10 @@ export default function SessionsWorkspace({
     })
     setSkillGenerationError('')
     setIsGeneratingSkill(false)
+    setSkillContentSelection(null)
+    setSelectionRewriteInstruction('')
+    setSelectionRewriteError('')
+    setIsRewritingSelection(false)
   }
 
   function handleCreateSkill() {
@@ -196,6 +216,10 @@ export default function SessionsWorkspace({
       skillDescription,
       generatedSkillContent,
     })
+    setSkillContentSelection(null)
+    setSelectionRewriteInstruction('')
+    setSelectionRewriteError('')
+    setIsRewritingSelection(false)
   }
 
   function handleSkillNameChange(nextValue: string) {
@@ -239,6 +263,50 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
       generatedSkillContent: nextValue,
     }))
+
+    setSkillContentSelection((currentSelection) => {
+      if (!currentSelection) {
+        return null
+      }
+
+      if (nextValue.slice(currentSelection.start, currentSelection.end) !== currentSelection.text) {
+        return null
+      }
+
+      return currentSelection
+    })
+  }
+
+  function handleGeneratedContentSelection() {
+    const textarea = generatedSkillContentRef.current
+
+    if (!textarea) {
+      return
+    }
+
+    const selectionStart = textarea.selectionStart
+    const selectionEnd = textarea.selectionEnd
+
+    if (selectionStart === selectionEnd) {
+      setSkillContentSelection(null)
+      setSelectionRewriteError('')
+      return
+    }
+
+    const selectedText = textarea.value.slice(selectionStart, selectionEnd)
+
+    if (!selectedText.trim()) {
+      setSkillContentSelection(null)
+      setSelectionRewriteError('')
+      return
+    }
+
+    setSkillContentSelection({
+      start: selectionStart,
+      end: selectionEnd,
+      text: selectedText,
+    })
+    setSelectionRewriteError('')
   }
 
   async function handleGenerateSkillContent() {
@@ -261,6 +329,7 @@ export default function SessionsWorkspace({
 
     setIsGeneratingSkill(true)
     setSkillGenerationError('')
+    setSelectionRewriteError('')
 
     try {
       const response = await fetch('/api/skills/generate', {
@@ -287,10 +356,101 @@ export default function SessionsWorkspace({
       }
 
       handleGeneratedSkillContentChange(result.content)
+      setSkillContentSelection(null)
+      setSelectionRewriteInstruction('')
     } catch (error) {
       setSkillGenerationError(error instanceof Error ? error.message : '生成失败。')
     } finally {
       setIsGeneratingSkill(false)
+    }
+  }
+
+  async function handleRewriteSelection() {
+    if (!selectedSession || !skillContentSelection) {
+      return
+    }
+
+    const trimmedInstruction = selectionRewriteInstruction.trim()
+
+    if (!trimmedInstruction) {
+      setSelectionRewriteError('请先填写修改意见。')
+      return
+    }
+
+    const currentSelectedText = generatedSkillContent.slice(
+      skillContentSelection.start,
+      skillContentSelection.end,
+    )
+
+    if (currentSelectedText !== skillContentSelection.text) {
+      setSelectionRewriteError('当前选区已经变化，请重新选择要修改的内容。')
+      setSkillContentSelection(null)
+      return
+    }
+
+    setIsRewritingSelection(true)
+    setSelectionRewriteError('')
+    setSkillGenerationError('')
+
+    try {
+      const response = await fetch('/api/skills/rewrite-selection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: skillName.trim(),
+          description: skillDescription.trim(),
+          sessionTitle: selectedSession.title,
+          sessionKey: selectedSession.sessionKey,
+          fullContent: generatedSkillContent,
+          selectedText: skillContentSelection.text,
+          instruction: trimmedInstruction,
+          selectedMessages,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        replacement?: string
+        error?: string
+      }
+
+      if (!response.ok || typeof result.replacement !== 'string') {
+        throw new Error(result.error || '局部修改失败。')
+      }
+
+      const nextContent = [
+        generatedSkillContent.slice(0, skillContentSelection.start),
+        result.replacement,
+        generatedSkillContent.slice(skillContentSelection.end),
+      ].join('')
+
+      handleGeneratedSkillContentChange(nextContent)
+
+      const nextSelectionStart = skillContentSelection.start
+      const nextSelectionEnd = skillContentSelection.start + result.replacement.length
+
+      setSkillContentSelection({
+        start: nextSelectionStart,
+        end: nextSelectionEnd,
+        text: result.replacement,
+      })
+      setSelectionRewriteInstruction('')
+
+      window.requestAnimationFrame(() => {
+        const textarea = generatedSkillContentRef.current
+
+        if (!textarea) {
+          return
+        }
+
+        textarea.focus()
+        textarea.setSelectionRange(nextSelectionStart, nextSelectionEnd)
+      })
+    } catch (error) {
+      setSelectionRewriteError(error instanceof Error ? error.message : '局部修改失败。')
+    } finally {
+      setIsRewritingSelection(false)
     }
   }
 
@@ -503,12 +663,84 @@ export default function SessionsWorkspace({
                     </div>
 
                     <textarea
+                      ref={generatedSkillContentRef}
                       value={generatedSkillContent}
                       onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
+                      onSelect={handleGeneratedContentSelection}
+                      onKeyUp={handleGeneratedContentSelection}
+                      onMouseUp={handleGeneratedContentSelection}
                       placeholder="生成结果会出现在这里。"
                       rows={18}
                       className="app-scrollbar mt-5 min-h-80 w-full resize-y border border-black px-3 py-2 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
                     />
+
+                    <div className="mt-4 border border-black bg-neutral-50 p-4">
+                      <div className="flex flex-col gap-2">
+                        <h4 className="text-sm font-medium">Selected Fragment Rewrite</h4>
+                        <p className="text-sm text-neutral-600">
+                          在上方选中一段文本后，输入修改意见，AI 只会返回该选中片段的替换内容。
+                        </p>
+                      </div>
+
+                      {skillContentSelection ? (
+                        <div className="mt-4 grid gap-4">
+                          <div className="border border-black bg-white p-3">
+                            <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                              <span>selected</span>
+                              <span>{skillContentSelection.text.length} chars</span>
+                            </div>
+                            <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
+                              {skillContentSelection.text}
+                            </pre>
+                          </div>
+
+                          <label className="grid gap-2 text-sm">
+                            <span className="font-medium">修改意见</span>
+                            <textarea
+                              value={selectionRewriteInstruction}
+                              onChange={(event) => setSelectionRewriteInstruction(event.target.value)}
+                              placeholder="例如：保留原意，但改成更清晰的步骤式写法。"
+                              rows={4}
+                              className="app-scrollbar min-h-24 w-full resize-y border border-black bg-white px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                            />
+                          </label>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleRewriteSelection()
+                              }}
+                              disabled={isRewritingSelection}
+                              className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                            >
+                              {isRewritingSelection ? 'Rewriting...' : 'Rewrite Selection'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSkillContentSelection(null)
+                                setSelectionRewriteInstruction('')
+                                setSelectionRewriteError('')
+                              }}
+                              className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+                            >
+                              Clear Selected Fragment
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 border border-dashed border-black bg-white px-3 py-4 text-sm text-neutral-500">
+                          先在上方 textarea 中选中要修改的片段。
+                        </div>
+                      )}
+
+                      {selectionRewriteError ? (
+                        <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                          {selectionRewriteError}
+                        </div>
+                      ) : null}
+                    </div>
                   </section>
                 </div>
               </div>
