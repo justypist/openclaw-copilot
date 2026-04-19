@@ -25,6 +25,15 @@ export interface SkillSummary {
   updatedAt?: number
 }
 
+export interface SkillReference {
+  folderName: string
+  location: SkillLocation
+}
+
+export interface SkillSource extends SkillSummary {
+  files: SkillFileDraft[]
+}
+
 export interface SkillsLibrary {
   root: string
   availableSkillsDirectory: string
@@ -100,6 +109,30 @@ export function slugifySkillName(name: string): string {
     .replace(/^-|-$/g, '')
 
   return normalized || 'skill'
+}
+
+function formatSkillSource(source: SkillSource, index: number): string {
+  const lines = [`## Skill ${index + 1}`]
+
+  lines.push(`- name: ${source.name}`)
+  lines.push(`- folderName: ${source.folderName}`)
+  lines.push(`- location: ${source.location}`)
+  lines.push(`- description: ${source.description}`)
+  lines.push(`- fileCount: ${source.files.length}`)
+
+  for (const file of source.files) {
+    lines.push('')
+    lines.push(`### File: ${file.path}`)
+    lines.push('```md')
+    lines.push(file.content)
+    lines.push('```')
+  }
+
+  return lines.join('\n')
+}
+
+export function buildSkillSourcesContext(sources: SkillSource[]): string {
+  return sources.map(formatSkillSource).join('\n\n')
 }
 
 function normalizeRelativePath(path: string): string {
@@ -227,6 +260,43 @@ async function listSkillsFromDirectory(
   return summaries
     .filter((summary): summary is SkillSummary => summary !== null)
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+}
+
+async function readSkillSource(
+  directory: string,
+  location: SkillLocation,
+  folderName: string,
+): Promise<SkillSource> {
+  const normalizedFolderName = validateSkillDirectoryName(folderName)
+  const skillDirectory = join(directory, normalizedFolderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${normalizedFolderName}`)
+  }
+
+  const filePaths = await collectSkillFiles(skillDirectory)
+  const files = await Promise.all(
+    filePaths.map(async (filePath) => ({
+      path: filePath,
+      content: await readFile(join(skillDirectory, filePath), 'utf8'),
+    })),
+  )
+  const metadata = parseSkillMetadata(
+    files.find((file) => file.path === 'SKILL.md')?.content ?? '',
+    normalizedFolderName,
+  )
+  const skillStat = await stat(skillDirectory)
+
+  return {
+    folderName: normalizedFolderName,
+    location,
+    name: metadata.name,
+    description: metadata.description,
+    filePaths,
+    updatedAt: skillStat.mtimeMs,
+    files,
+  }
 }
 
 function resolveSkillDirectory(context: SkillsContext, location: SkillLocation): string {
@@ -394,6 +464,44 @@ export async function moveSkills(input: {
     targetDirectory,
     targetLocation,
   }
+}
+
+export async function getSkillSources(input: { skills: SkillReference[] }): Promise<SkillSource[]> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const references = Array.from(
+    new Map(
+      input.skills.map((skill) => {
+        const location = skill.location
+
+        if (location !== 'available' && location !== 'enabled') {
+          throw new Error('存在不合法的 skill 来源目录。')
+        }
+
+        const folderName = validateSkillDirectoryName(skill.folderName)
+
+        return [`${location}:${folderName}`, { location, folderName } satisfies SkillReference]
+      }),
+    ).values(),
+  )
+
+  if (references.length === 0) {
+    throw new Error('至少需要选择一个 skill。')
+  }
+
+  return Promise.all(
+    references.map((reference) =>
+      readSkillSource(
+        resolveSkillDirectory(context.data, reference.location),
+        reference.location,
+        reference.folderName,
+      ),
+    ),
+  )
 }
 
 export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Promise<{

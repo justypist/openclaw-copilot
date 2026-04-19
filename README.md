@@ -13,7 +13,7 @@
 - [x] 点击保存按钮，将最终SKILL写入 config.openclaw.root 下的 available-skills 文件夹
 - [x] 再提供一个页面用于展示 available-skills enabled-skills
   - [x] 可以对available-skills中的skill进行勾选，勾选后转移到enabled-skills, 再次勾选可以转移回来
-  - [ ] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
+  - [x] 可以选择多个 skills, 出现按钮 "Merge Skill", 点击后通过AI进行合并，同时出现上面的Skill Editor, 支持选中某一段话添加修改意见，让AI修改选中的部分，确认无误后最终保存到 available-skills
 
 ## 当前实现状态
 
@@ -40,6 +40,8 @@
   - 展示 `available-skills` 与 `enabled-skills`
   - 支持分别多选 skill 目录
   - 支持把选中的 skill 在两个目录之间整目录转移
+  - 支持跨 `available/enabled` 多选多个 skills 后进入 `Merge Skill` 编辑流
+  - 合并流支持：生成合并草稿、选区局部改写、定稿拆分、保存到 `available-skills`
   - 首页顶部可直接跳转到该页面
 
 ## 已实现文件
@@ -77,9 +79,18 @@
 - `app/api/skills/move/route.ts`
   - 新增服务端转移接口。
   - 支持把选中的 skill 目录在 `available-skills` / `enabled-skills` 之间移动。
+- `app/api/skills/merge/route.ts`
+  - 新增服务端合并接口。
+  - 接收多个已选 skill，调用 AI 生成合并后的完整 SKILL 草稿。
+- `app/api/skills/rewrite-merged-selection/route.ts`
+  - 新增合并草稿的局部改写接口。
+  - 接收完整草稿、当前选区、修改意见与源 skill 上下文，只返回选区替换内容。
+- `app/api/skills/finalize-merged/route.ts`
+  - 新增合并草稿定稿接口。
+  - 接收当前合并草稿与源 skill 上下文，输出最终可保存的 skill 文件集合。
 - `lib/skills.ts`
   - 抽取 skill 相关公共逻辑。
-  - 包含时间线上下文格式化、文件路径校验、目录名规范化、skill 目录扫描、目录转移与写盘逻辑。
+  - 包含时间线上下文格式化、skill 上下文格式化、文件路径校验、目录名规范化、skill 目录扫描、目录读取、目录转移与写盘逻辑。
 - `app/skills/page.tsx`
   - 新增 skills 管理页 Server Component。
   - 负责按请求读取 `available-skills` / `enabled-skills`。
@@ -158,7 +169,7 @@
 - 继续保证“选中的记录”包含完整时间线项，而不是只限普通聊天文本。
 - 当前已具备完整生成、手动编辑、局部选区改写链路。
 - 当前已补完 `available-skills / enabled-skills` 管理页。
-- 下一步可继续补多 skill 合并流。
+- 下一步可继续补充合并结果预览优化、冲突提示或合并策略微调。
 - 局部改写时，AI 仍然可以同时参考：
   - 用户原始需求
   - assistant 的处理过程
