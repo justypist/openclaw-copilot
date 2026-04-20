@@ -1,0 +1,17 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-local}/openclaw-copilot:local
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      OPENCLAW_ROOT: /data/openclaw
+    volumes:
+      - ${OPENCLAW_ROOT:-$HOME/.openclaw}:/data/openclaw
+    restart: unless-stopped
