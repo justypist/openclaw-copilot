@@ -1,7 +1,7 @@
 import { streamText } from 'ai'
 
 import { options } from '@/lib/ai'
-import { buildConversationContext, isSessionMessageArray } from '@/lib/skills'
+import { buildConversationContextForAi, isSessionMessageArray, SkillsInputError } from '@/lib/skills'
 
 interface GenerateSkillRequestBody {
   name?: unknown
@@ -45,10 +45,9 @@ export async function POST(request: Request) {
     return Response.json({ error: '选中的聊天记录格式不合法。' }, { status: 400 })
   }
 
-  const selectedMessages = body.selectedMessages
-  const conversationContext = buildConversationContext(selectedMessages)
-
   try {
+    const conversationContext = buildConversationContextForAi(body.selectedMessages)
+
     const { text } = streamText({
       ...options,
       system: [
@@ -72,6 +71,10 @@ export async function POST(request: Request) {
 
     return Response.json({ content: await text })
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '生成失败。'
 
     return Response.json({ error: message }, { status: 500 })

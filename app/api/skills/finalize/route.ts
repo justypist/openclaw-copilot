@@ -3,9 +3,11 @@ import { z } from 'zod'
 
 import { options } from '@/lib/ai'
 import {
-  buildConversationContext,
+  buildConversationContextForAi,
   isSessionMessageArray,
   slugifySkillName,
+  SkillsInputError,
+  validateSkillContentForAi,
   validateFinalizedSkillDraft,
 } from '@/lib/skills'
 
@@ -47,7 +49,7 @@ export async function POST(request: Request) {
   const description = normalizeText(body.description)
   const sessionTitle = normalizeText(body.sessionTitle)
   const sessionKey = normalizeText(body.sessionKey)
-  const fullContent = typeof body.fullContent === 'string' ? body.fullContent.trim() : ''
+  const fullContent = typeof body.fullContent === 'string' ? body.fullContent : ''
 
   if (!name) {
     return Response.json({ error: '缺少 skill name。' }, { status: 400 })
@@ -57,7 +59,7 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少 skill description。' }, { status: 400 })
   }
 
-  if (!fullContent) {
+  if (!fullContent.trim()) {
     return Response.json({ error: '缺少完整 skill 内容。' }, { status: 400 })
   }
 
@@ -69,10 +71,12 @@ export async function POST(request: Request) {
     return Response.json({ error: '选中的聊天记录格式不合法。' }, { status: 400 })
   }
 
-  const conversationContext = buildConversationContext(body.selectedMessages)
   const suggestedFolderName = slugifySkillName(name)
 
   try {
+    const validatedFullContent = validateSkillContentForAi(fullContent.trim())
+    const conversationContext = buildConversationContextForAi(body.selectedMessages)
+
     const { output } = streamText({
       ...options,
       output: Output.object({
@@ -98,7 +102,7 @@ export async function POST(request: Request) {
         `Session key: ${sessionKey || 'unknown'}`,
         '',
         '## Current Skill Draft',
-        fullContent,
+        validatedFullContent,
         '',
         '## Timeline Context',
         conversationContext,
@@ -109,6 +113,10 @@ export async function POST(request: Request) {
 
     return Response.json(draft)
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '定稿失败。'
 
     return Response.json({ error: message }, { status: 500 })

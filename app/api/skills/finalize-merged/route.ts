@@ -3,9 +3,11 @@ import { z } from 'zod'
 
 import { options } from '@/lib/ai'
 import {
-  buildSkillSourcesContext,
+  buildSkillSourcesContextForAi,
   getSkillSources,
   slugifySkillName,
+  SkillsInputError,
+  validateSkillContentForAi,
   validateFinalizedSkillDraft,
   type SkillLocation,
 } from '@/lib/skills'
@@ -72,7 +74,7 @@ export async function POST(request: Request) {
 
   const name = normalizeText(body.name)
   const description = normalizeText(body.description)
-  const fullContent = typeof body.fullContent === 'string' ? body.fullContent.trim() : ''
+  const fullContent = typeof body.fullContent === 'string' ? body.fullContent : ''
   const selectedSkills = parseSkillReferences(body.selectedSkills)
 
   if (!name) {
@@ -83,7 +85,7 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少 skill description。' }, { status: 400 })
   }
 
-  if (!fullContent) {
+  if (!fullContent.trim()) {
     return Response.json({ error: '缺少完整 skill 内容。' }, { status: 400 })
   }
 
@@ -94,8 +96,9 @@ export async function POST(request: Request) {
   const suggestedFolderName = slugifySkillName(name)
 
   try {
+    const validatedFullContent = validateSkillContentForAi(fullContent.trim())
     const sources = await getSkillSources({ skills: selectedSkills })
-    const sourcesContext = buildSkillSourcesContext(sources)
+    const sourcesContext = buildSkillSourcesContextForAi(sources)
 
     const { output } = streamText({
       ...options,
@@ -120,7 +123,7 @@ export async function POST(request: Request) {
         `Suggested folder name: ${suggestedFolderName}`,
         '',
         '## Current Merged Skill Draft',
-        fullContent,
+        validatedFullContent,
         '',
         '## Source Skills',
         sourcesContext,
@@ -131,6 +134,10 @@ export async function POST(request: Request) {
 
     return Response.json(draft)
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '定稿失败。'
 
     return Response.json({ error: message }, { status: 500 })

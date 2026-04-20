@@ -1,7 +1,13 @@
 import { streamText } from 'ai'
 
 import { options } from '@/lib/ai'
-import { buildSkillSourcesContext, getSkillSources, type SkillLocation } from '@/lib/skills'
+import {
+  buildSkillSourcesContextForAi,
+  getSkillSources,
+  SkillsInputError,
+  type SkillLocation,
+  validateSkillContentForAi,
+} from '@/lib/skills'
 
 interface RewriteMergedSelectionRequestBody {
   name?: unknown
@@ -81,8 +87,9 @@ export async function POST(request: Request) {
   }
 
   try {
+    const validatedFullContent = validateSkillContentForAi(fullContent)
     const sources = await getSkillSources({ skills: selectedSkills })
-    const sourcesContext = buildSkillSourcesContext(sources)
+    const sourcesContext = buildSkillSourcesContextForAi(sources)
 
     const { text } = streamText({
       ...options,
@@ -102,7 +109,7 @@ export async function POST(request: Request) {
         instruction,
         '',
         '## Full Skill Content',
-        fullContent,
+        validatedFullContent,
         '',
         '## Selected Fragment To Replace',
         selectedText,
@@ -114,6 +121,10 @@ export async function POST(request: Request) {
 
     return Response.json({ replacement: await text })
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '局部修改失败。'
 
     return Response.json({ error: message }, { status: 500 })

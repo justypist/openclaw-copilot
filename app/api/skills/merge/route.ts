@@ -1,7 +1,12 @@
 import { streamText } from 'ai'
 
 import { options } from '@/lib/ai'
-import { buildSkillSourcesContext, getSkillSources, type SkillLocation } from '@/lib/skills'
+import {
+  buildSkillSourcesContextForAi,
+  getSkillSources,
+  SkillsInputError,
+  type SkillLocation,
+} from '@/lib/skills'
 
 interface MergeSkillRequestBody {
   name?: unknown
@@ -68,7 +73,7 @@ export async function POST(request: Request) {
 
   try {
     const sources = await getSkillSources({ skills: selectedSkills })
-    const sourcesContext = buildSkillSourcesContext(sources)
+    const sourcesContext = buildSkillSourcesContextForAi(sources)
 
     const { text } = streamText({
       ...options,
@@ -92,6 +97,10 @@ export async function POST(request: Request) {
 
     return Response.json({ content: await text })
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '合并失败。'
 
     return Response.json({ error: message }, { status: 500 })

@@ -1,7 +1,12 @@
 import { streamText } from 'ai'
 
 import { options } from '@/lib/ai'
-import { buildConversationContext, isSessionMessageArray } from '@/lib/skills'
+import {
+  buildConversationContextForAi,
+  isSessionMessageArray,
+  SkillsInputError,
+  validateSkillContentForAi,
+} from '@/lib/skills'
 
 interface RewriteSelectionRequestBody {
   name?: unknown
@@ -59,9 +64,10 @@ export async function POST(request: Request) {
     return Response.json({ error: '选中片段不在当前内容中。' }, { status: 400 })
   }
 
-  const conversationContext = buildConversationContext(body.selectedMessages)
-
   try {
+    const validatedFullContent = validateSkillContentForAi(fullContent)
+    const conversationContext = buildConversationContextForAi(body.selectedMessages)
+
     const { text } = streamText({
       ...options,
       system: [
@@ -82,7 +88,7 @@ export async function POST(request: Request) {
         instruction,
         '',
         '## Full Skill Content',
-        fullContent,
+        validatedFullContent,
         '',
         '## Selected Fragment To Replace',
         selectedText,
@@ -94,6 +100,10 @@ export async function POST(request: Request) {
 
     return Response.json({ replacement: await text })
   } catch (error) {
+    if (error instanceof SkillsInputError) {
+      return Response.json({ error: error.message }, { status: 400 })
+    }
+
     const message = error instanceof Error ? error.message : '局部修改失败。'
 
     return Response.json({ error: message }, { status: 500 })

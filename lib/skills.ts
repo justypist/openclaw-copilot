@@ -20,6 +20,18 @@ const SESSION_MESSAGE_ROLES = new Set<SessionMessage['role']>([
   'event',
 ])
 
+const MAX_AI_SELECTED_MESSAGES = 200
+const MAX_AI_SKILL_CONTENT_LENGTH = 100_000
+const MAX_AI_CONVERSATION_CONTEXT_LENGTH = 120_000
+const MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH = 160_000
+
+export class SkillsInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SkillsInputError'
+  }
+}
+
 export interface SkillFileDraft {
   path: string
   content: string
@@ -68,6 +80,12 @@ const execFile = promisify(execFileCallback)
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function assertMaxLength(value: string, maxLength: number, errorMessage: string): void {
+  if (value.length > maxLength) {
+    throw new SkillsInputError(errorMessage)
+  }
 }
 
 function isValidSessionTimestamp(value: unknown): value is number {
@@ -143,6 +161,22 @@ export function buildConversationContext(messages: SessionMessage[]): string {
   return messages.map(formatSessionMessage).join('\n\n')
 }
 
+export function buildConversationContextForAi(messages: SessionMessage[]): string {
+  if (messages.length > MAX_AI_SELECTED_MESSAGES) {
+    throw new SkillsInputError(`选中的聊天记录过多，最多允许 ${MAX_AI_SELECTED_MESSAGES} 条。`)
+  }
+
+  const conversationContext = buildConversationContext(messages)
+
+  assertMaxLength(
+    conversationContext,
+    MAX_AI_CONVERSATION_CONTEXT_LENGTH,
+    `选中的聊天记录内容过长，最多允许 ${MAX_AI_CONVERSATION_CONTEXT_LENGTH} 个字符。请减少选择范围后重试。`,
+  )
+
+  return conversationContext
+}
+
 export function slugifySkillName(name: string): string {
   const normalized = name
     .normalize('NFKC')
@@ -179,6 +213,28 @@ function formatSkillSource(source: SkillSource, index: number): string {
 
 export function buildSkillSourcesContext(sources: SkillSource[]): string {
   return sources.map(formatSkillSource).join('\n\n')
+}
+
+export function buildSkillSourcesContextForAi(sources: SkillSource[]): string {
+  const sourcesContext = buildSkillSourcesContext(sources)
+
+  assertMaxLength(
+    sourcesContext,
+    MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH,
+    `源 skill 内容过长，最多允许 ${MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH} 个字符。请减少选择的 skills 后重试。`,
+  )
+
+  return sourcesContext
+}
+
+export function validateSkillContentForAi(value: string): string {
+  assertMaxLength(
+    value,
+    MAX_AI_SKILL_CONTENT_LENGTH,
+    `完整 skill 内容过长，最多允许 ${MAX_AI_SKILL_CONTENT_LENGTH} 个字符。请精简内容后重试。`,
+  )
+
+  return value
 }
 
 function normalizeRelativePath(path: string): string {
