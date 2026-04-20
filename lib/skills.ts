@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { access, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -592,17 +592,49 @@ export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Prom
   const draft = validateFinalizedSkillDraft(input)
   const { root, availableSkillsDirectory } = context.data
   const skillDirectory = join(availableSkillsDirectory, draft.folderName)
+  const transientDirectorySuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const stagingSkillDirectory = join(
+    availableSkillsDirectory,
+    `.${draft.folderName}.staging-${transientDirectorySuffix}`,
+  )
+  const backupSkillDirectory = join(
+    availableSkillsDirectory,
+    `.${draft.folderName}.backup-${transientDirectorySuffix}`,
+  )
 
   await mkdir(availableSkillsDirectory, { recursive: true })
+  await mkdir(stagingSkillDirectory, { recursive: true })
 
   await Promise.all(
     draft.files.map(async (file) => {
-      const targetPath = join(skillDirectory, file.path)
+      const targetPath = join(stagingSkillDirectory, file.path)
 
       await mkdir(dirname(targetPath), { recursive: true })
       await writeFile(targetPath, `${file.content.trim()}\n`, 'utf8')
     }),
   )
+
+  try {
+    if (await pathExists(skillDirectory)) {
+      await rename(skillDirectory, backupSkillDirectory)
+    }
+
+    await rename(stagingSkillDirectory, skillDirectory)
+
+    if (await pathExists(backupSkillDirectory)) {
+      await rm(backupSkillDirectory, { recursive: true, force: true })
+    }
+  } catch (error) {
+    if (await pathExists(stagingSkillDirectory)) {
+      await rm(stagingSkillDirectory, { recursive: true, force: true })
+    }
+
+    if (!(await pathExists(skillDirectory)) && (await pathExists(backupSkillDirectory))) {
+      await rename(backupSkillDirectory, skillDirectory)
+    }
+
+    throw error
+  }
 
   return {
     root,
