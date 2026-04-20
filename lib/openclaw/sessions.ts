@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises'
+import { access, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { config } from '@/config'
@@ -31,6 +31,7 @@ export interface SessionMessage {
     | 'event'
   text: string
   timestamp?: number
+  sourceRecordId?: string
   toolName?: string
   toolCallId?: string
   isError?: boolean
@@ -114,20 +115,34 @@ interface ParsedSessionFile {
   messages?: SessionMessage[]
 }
 
+interface SessionIndexMetadata {
+  sessionId: string
+  sessionKey: string
+  updatedAt: number
+  startedAt?: number
+  status?: string
+  model?: string
+  channel?: string
+}
+
+interface SessionSegment {
+  sessionId: string
+  startedAt?: number
+  updatedAt?: number
+  title: string
+  messageCount: number
+  messages: SessionMessage[]
+}
+
+interface SessionFileDescriptor {
+  fileName: string
+  logicalSessionId: string
+  sourceSessionId: string
+}
+
 interface SessionsContext {
   root: string
   sessionsDirectory: string
-}
-
-function buildEmptySessionsOverview(root: string, sessionsDirectory: string): SessionsOverviewResult {
-  return {
-    ok: true,
-    data: {
-      root,
-      sessionsDirectory,
-      sessions: [],
-    },
-  }
 }
 
 function isSessionContentPart(value: unknown): value is SessionContentPart {
@@ -135,6 +150,10 @@ function isSessionContentPart(value: unknown): value is SessionContentPart {
 }
 
 const MAX_TITLE_LENGTH = 80
+const JSONL_EXTENSION = '.jsonl'
+const RESET_FILE_MARKER = '.jsonl.reset.'
+const SESSION_RESET_MARKER = 'A new session was started via /new or /reset.'
+const SESSION_SEGMENT_ID_SEPARATOR = '::segment:'
 
 function getSessionsDirectory(root: string): string {
   return join(root, 'agents', 'main', 'sessions')
@@ -216,12 +235,262 @@ function buildTitleFromText(text: string): string | undefined {
   return undefined
 }
 
+function isSessionResetMessage(text: string): boolean {
+  return text.includes(SESSION_RESET_MARKER)
+}
+
+function isResetTimelineEntry(message: SessionMessage): boolean {
+  return message.role === 'user' && isSessionResetMessage(message.text)
+}
+
 function fallbackTitle(sessionKey: string, sessionId: string): string {
   if (sessionKey) {
     return sessionKey
   }
 
   return `session:${sessionId}`
+}
+
+function buildSegmentSessionId(baseSessionId: string, segmentIndex: number, segmentCount: number): string {
+  if (segmentCount <= 1) {
+    return baseSessionId
+  }
+
+  return `${baseSessionId}${SESSION_SEGMENT_ID_SEPARATOR}${segmentIndex + 1}`
+}
+
+function parseSegmentSessionId(sessionId: string): {
+  baseSessionId: string
+  segmentOrdinal?: number
+} {
+  const separatorIndex = sessionId.lastIndexOf(SESSION_SEGMENT_ID_SEPARATOR)
+
+  if (separatorIndex === -1) {
+    return {
+      baseSessionId: sessionId,
+    }
+  }
+
+  const baseSessionId = sessionId.slice(0, separatorIndex)
+  const rawSegmentOrdinal = sessionId.slice(separatorIndex + SESSION_SEGMENT_ID_SEPARATOR.length)
+  const segmentOrdinal = Number.parseInt(rawSegmentOrdinal, 10)
+
+  if (!baseSessionId || Number.isNaN(segmentOrdinal) || segmentOrdinal < 1) {
+    return {
+      baseSessionId: sessionId,
+    }
+  }
+
+  return {
+    baseSessionId,
+    segmentOrdinal,
+  }
+}
+
+function buildSegmentFallbackTitle(
+  sessionKey: string,
+  sessionId: string,
+  segmentIndex: number,
+  segmentCount: number,
+): string {
+  const baseTitle = fallbackTitle(sessionKey, sessionId)
+
+  if (segmentCount <= 1) {
+    return baseTitle
+  }
+
+  return `${baseTitle} #${segmentIndex + 1}`
+}
+
+function parseSessionFileDescriptor(fileName: string): SessionFileDescriptor | null {
+  if (fileName.endsWith(JSONL_EXTENSION)) {
+    const sourceSessionId = fileName.slice(0, -JSONL_EXTENSION.length)
+
+    if (!sourceSessionId) {
+      return null
+    }
+
+    return {
+      fileName,
+      logicalSessionId: sourceSessionId,
+      sourceSessionId,
+    }
+  }
+
+  const resetMarkerIndex = fileName.indexOf(RESET_FILE_MARKER)
+
+  if (resetMarkerIndex === -1) {
+    return null
+  }
+
+  const sourceSessionId = fileName.slice(0, resetMarkerIndex)
+
+  if (!sourceSessionId) {
+    return null
+  }
+
+  return {
+    fileName,
+    logicalSessionId: fileName,
+    sourceSessionId,
+  }
+}
+
+function resolveSessionFileName(sessionId: string): string {
+  if (sessionId.endsWith(JSONL_EXTENSION) || sessionId.includes(RESET_FILE_MARKER)) {
+    return sessionId
+  }
+
+  return `${sessionId}${JSONL_EXTENSION}`
+}
+
+function extractConversationChatId(text: string): string | undefined {
+  const match = text.match(/"chat_id"\s*:\s*"([^"]+)"/)
+
+  return match?.[1]
+}
+
+function inferSessionIdentity(messages: SessionMessage[] | undefined): {
+  sessionKey?: string
+  channel?: string
+} {
+  for (const message of messages ?? []) {
+    if (message.role !== 'user') {
+      continue
+    }
+
+    const chatId = extractConversationChatId(message.text)
+
+    if (chatId) {
+      if (chatId.startsWith('telegram:')) {
+        return {
+          channel: 'telegram',
+          sessionKey: `agent:main:telegram:direct:${chatId.slice('telegram:'.length)}`,
+        }
+      }
+
+      if (chatId.toLowerCase().endsWith('@im.wechat')) {
+        return {
+          channel: 'openclaw-weixin',
+          sessionKey: `agent:main:openclaw-weixin:direct:${chatId.toLowerCase()}`,
+        }
+      }
+
+      return {
+        sessionKey: chatId,
+      }
+    }
+
+    if (message.text.includes('openclaw-control-ui')) {
+      return {
+        channel: 'webchat',
+        sessionKey: 'agent:main:main',
+      }
+    }
+  }
+
+  return {}
+}
+
+function buildSessionSegments(
+  baseSessionId: string,
+  sessionKey: string,
+  messages: SessionMessage[] | undefined,
+): SessionSegment[] {
+  const timeline = messages ?? []
+
+  if (timeline.length === 0) {
+    return [
+      {
+        sessionId: baseSessionId,
+        startedAt: undefined,
+        updatedAt: undefined,
+        title: fallbackTitle(sessionKey, baseSessionId),
+        messageCount: 0,
+        messages: [],
+      },
+    ]
+  }
+
+  const rawSegments: SessionMessage[][] = []
+  let currentSegment: SessionMessage[] = []
+  let hasSeenConversation = false
+
+  for (const message of timeline) {
+    const isResetMessage = isResetTimelineEntry(message)
+
+    if (isResetMessage && hasSeenConversation && currentSegment.length > 0) {
+      rawSegments.push(currentSegment)
+      currentSegment = []
+      hasSeenConversation = false
+    }
+
+    currentSegment.push(message)
+
+    if (message.role === 'assistant') {
+      hasSeenConversation = true
+      continue
+    }
+
+    if (message.role === 'user' && message.text.trim() && !isResetMessage) {
+      hasSeenConversation = true
+    }
+  }
+
+  if (currentSegment.length > 0) {
+    rawSegments.push(currentSegment)
+  }
+
+  return rawSegments.map((segmentMessages, segmentIndex, segments): SessionSegment => {
+    const visibleMessages = segmentMessages.filter((message) => !isResetTimelineEntry(message))
+    let startedAt: number | undefined
+    let updatedAt: number | undefined
+    let title: string | undefined
+    let messageCount = 0
+    const countedRecordIds = new Set<string>()
+
+    for (const message of segmentMessages) {
+      if (startedAt === undefined && message.timestamp !== undefined) {
+        startedAt = message.timestamp
+      }
+
+      if (message.timestamp !== undefined) {
+        updatedAt = message.timestamp
+      }
+
+      if ((message.role !== 'user' && message.role !== 'assistant') || !message.text.trim()) {
+        continue
+      }
+
+      if (isResetTimelineEntry(message)) {
+        continue
+      }
+
+      if (!title && message.role === 'user') {
+        title = buildTitleFromText(message.text)
+      }
+
+      const recordId = message.sourceRecordId ?? message.id
+
+      if (countedRecordIds.has(recordId)) {
+        continue
+      }
+
+      countedRecordIds.add(recordId)
+      messageCount += 1
+    }
+
+    return {
+      sessionId: buildSegmentSessionId(baseSessionId, segmentIndex, segments.length),
+      startedAt,
+      updatedAt,
+      title:
+        title ??
+        buildSegmentFallbackTitle(sessionKey, baseSessionId, segmentIndex, segments.length),
+      messageCount,
+      messages: visibleMessages,
+    }
+  })
 }
 
 function extractTextParts(content: SessionContentPart[] | undefined): string[] {
@@ -403,6 +672,7 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
 
   const speaker: 'user' | 'assistant' = role
   const entries: SessionMessage[] = []
+  const sourceRecordId = record.id ?? `${speaker}-${timestamp ?? 'unknown'}-${messageCount}`
   const content = Array.isArray(record.message?.content)
     ? record.message.content.filter(isSessionContentPart)
     : []
@@ -426,6 +696,7 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
       role: speaker,
       text,
       timestamp,
+      sourceRecordId,
     })
     textParts = []
   }
@@ -625,71 +896,89 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
 
   const sessionsIndexPath = join(sessionsDirectory, 'sessions.json')
 
-  if (!(await pathExists(sessionsIndexPath))) {
-    return {
-      ok: false,
-      error: `找不到会话索引文件：${sessionsIndexPath}`,
-      root,
-    }
-  }
-
-  let sessionIndex: Record<string, SessionIndexRecord>
+  let sessionIndex: Record<string, SessionIndexRecord> = {}
   const rawIndex = await readFile(sessionsIndexPath, 'utf8').catch(() => null)
 
-  if (rawIndex === null) {
-    return buildEmptySessionsOverview(root, sessionsDirectory)
+  if (rawIndex !== null) {
+    try {
+      const parsedIndex = JSON.parse(rawIndex) as unknown
+
+      if (parsedIndex && !Array.isArray(parsedIndex) && typeof parsedIndex === 'object') {
+        sessionIndex = parsedIndex as Record<string, SessionIndexRecord>
+      }
+    } catch {
+      sessionIndex = {}
+    }
   }
 
-  try {
-    const parsedIndex = JSON.parse(rawIndex) as unknown
+  const sessionMetadataById = new Map<string, SessionIndexMetadata>()
 
-    if (!parsedIndex || Array.isArray(parsedIndex) || typeof parsedIndex !== 'object') {
-      return buildEmptySessionsOverview(root, sessionsDirectory)
+  for (const [sessionKey, record] of Object.entries(sessionIndex)) {
+    if (typeof record?.sessionId !== 'string' || !record.sessionId.trim()) {
+      continue
     }
 
-    sessionIndex = parsedIndex as Record<string, SessionIndexRecord>
-  } catch {
-    return buildEmptySessionsOverview(root, sessionsDirectory)
+    const metadata: SessionIndexMetadata = {
+      sessionId: record.sessionId,
+      sessionKey,
+      updatedAt: record.updatedAt,
+      startedAt: record.startedAt,
+      status: record.status,
+      model: record.model,
+      channel: record.deliveryContext?.channel ?? record.lastChannel,
+    }
+    const existingMetadata = sessionMetadataById.get(record.sessionId)
+
+    if (!existingMetadata || metadata.updatedAt >= existingMetadata.updatedAt) {
+      sessionMetadataById.set(record.sessionId, metadata)
+    }
   }
 
+  const sessionFiles = await readdir(sessionsDirectory, {
+    withFileTypes: true,
+  }).catch(() => [])
+
   const sessions = await Promise.all(
-    Object.entries(sessionIndex).map(async ([sessionKey, record]): Promise<SessionSummary | null> => {
-      try {
-        if (typeof record?.sessionId !== 'string' || !record.sessionId.trim()) {
-          return null
-        }
+    sessionFiles
+      .filter((entry) => entry.isFile())
+      .map(async (entry): Promise<SessionSummary[]> => {
+        try {
+          const descriptor = parseSessionFileDescriptor(entry.name)
 
-        const sessionFilePath = join(sessionsDirectory, `${record.sessionId}.jsonl`)
-        let parsed: ParsedSessionFile = { messageCount: 0 }
-
-        if (await pathExists(sessionFilePath)) {
-          const contents = await readFile(sessionFilePath, 'utf8').catch(() => null)
-
-          if (contents !== null) {
-            parsed = parseSessionContents(contents)
+          if (!descriptor) {
+            return []
           }
-        }
 
-        const session: SessionSummary = {
-          sessionId: record.sessionId,
-          sessionKey,
-          updatedAt: record.updatedAt,
-          startedAt: parsed.startedAt ?? record.startedAt,
-          status: record.status,
-          model: record.model,
-          channel: record.deliveryContext?.channel ?? record.lastChannel,
-          messageCount: parsed.messageCount,
-          title: parsed.title ?? fallbackTitle(sessionKey, record.sessionId),
-        }
+          const metadata = sessionMetadataById.get(descriptor.sourceSessionId)
+          const parsed = await parseSessionFile(join(sessionsDirectory, descriptor.fileName), {
+            includeMessages: true,
+          })
+          const inferredIdentity = inferSessionIdentity(parsed.messages)
+          const sessionKey =
+            metadata?.sessionKey ??
+            inferredIdentity.sessionKey ??
+            `session:${descriptor.sourceSessionId}`
 
-        return session
-      } catch {
-        return null
-      }
-    }),
+          return buildSessionSegments(descriptor.logicalSessionId, sessionKey, parsed.messages).map(
+            (segment) => ({
+            sessionId: segment.sessionId,
+            sessionKey,
+            updatedAt: segment.updatedAt ?? metadata?.updatedAt ?? segment.startedAt ?? 0,
+            startedAt: segment.startedAt ?? parsed.startedAt ?? metadata?.startedAt,
+            status: metadata?.status,
+            model: metadata?.model,
+            channel: metadata?.channel ?? inferredIdentity.channel,
+            messageCount: segment.messageCount,
+            title: segment.title,
+            }),
+          )
+        } catch {
+          return []
+        }
+      }),
   )
 
-  const validSessions = sessions.filter((session): session is SessionSummary => session !== null)
+  const validSessions = sessions.flat()
 
   return {
     ok: true,
@@ -729,6 +1018,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
     }
   }
 
+  const { baseSessionId, segmentOrdinal } = parseSegmentSessionId(normalizedSessionId)
   const context = await resolveSessionsContext()
 
   if (!context.ok) {
@@ -736,7 +1026,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
   }
 
   const { root, sessionsDirectory } = context.data
-  const sessionFilePath = join(sessionsDirectory, `${normalizedSessionId}.jsonl`)
+  const sessionFilePath = join(sessionsDirectory, resolveSessionFileName(baseSessionId))
 
   if (!(await pathExists(sessionFilePath))) {
     return {
@@ -749,6 +1039,20 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
   const parsed = await parseSessionFile(sessionFilePath, {
     includeMessages: true,
   })
+  const segments = buildSessionSegments(baseSessionId, '', parsed.messages)
+  const selectedSegment =
+    segmentOrdinal === undefined
+      ? segments.find((segment) => segment.sessionId === normalizedSessionId)
+      : segments[segmentOrdinal - 1]
+  const segmentedMessages = selectedSegment?.messages
+
+  if (!segmentedMessages) {
+    return {
+      ok: false,
+      error: `找不到逻辑会话片段：${normalizedSessionId}`,
+      root,
+    }
+  }
 
   return {
     ok: true,
@@ -756,7 +1060,7 @@ export async function getSessionMessages(sessionId: string): Promise<SessionMess
       root,
       sessionsDirectory,
       sessionId: normalizedSessionId,
-      messages: parsed.messages ?? [],
+      messages: segmentedMessages,
     },
   }
 }
