@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState, useTransition } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
@@ -29,6 +29,13 @@ interface SkillContentSelection {
   start: number
   end: number
   text: string
+}
+
+interface TextareaViewState {
+  scrollTop: number
+  scrollLeft: number
+  selectionStart: number
+  selectionEnd: number
 }
 
 interface SkillFileDraft {
@@ -100,6 +107,7 @@ export default function SessionsWorkspace({
   const router = useRouter()
   const pathname = usePathname()
   const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
+  const pendingTextareaViewStateRef = useRef<TextareaViewState | null>(null)
   const skillGenerationRequestIdRef = useRef(0)
   const [isPending, startTransition] = useTransition()
   const activeSessionId = selectedSession?.sessionId ?? ''
@@ -123,6 +131,7 @@ export default function SessionsWorkspace({
   const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
   const [isSelectionRewriteDialogOpen, setIsSelectionRewriteDialogOpen] = useState(false)
   const [selectionRewriteInstruction, setSelectionRewriteInstruction] = useState('')
+  const [selectionRewritePreview, setSelectionRewritePreview] = useState<string | null>(null)
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
   const [finalizedSkill, setFinalizedSkill] = useState<FinalizedSkillDraft | null>(null)
@@ -169,6 +178,21 @@ export default function SessionsWorkspace({
   const selectedCount = selectedMessageKeys.length
   const allSelected = selectableMessageKeys.length > 0 && selectedCount === selectableMessageKeys.length
 
+  useLayoutEffect(() => {
+    const textarea = generatedSkillContentRef.current
+    const pendingViewState = pendingTextareaViewStateRef.current
+
+    if (!textarea || !pendingViewState) {
+      return
+    }
+
+    pendingTextareaViewStateRef.current = null
+    textarea.focus()
+    textarea.setSelectionRange(pendingViewState.selectionStart, pendingViewState.selectionEnd)
+    textarea.scrollTop = pendingViewState.scrollTop
+    textarea.scrollLeft = pendingViewState.scrollLeft
+  }, [generatedSkillContent])
+
   function resetFinalizedSkillState() {
     setFinalizedSkill(null)
     setIsFinalizingSkill(false)
@@ -182,7 +206,23 @@ export default function SessionsWorkspace({
     setSkillContentSelection(null)
     setIsSelectionRewriteDialogOpen(false)
     setSelectionRewriteInstruction('')
+    setSelectionRewritePreview(null)
     setSelectionRewriteError('')
+  }
+
+  function queueGeneratedContentViewRestore(selectionStart: number, selectionEnd: number) {
+    const textarea = generatedSkillContentRef.current
+
+    if (!textarea) {
+      return
+    }
+
+    pendingTextareaViewStateRef.current = {
+      scrollTop: textarea.scrollTop,
+      scrollLeft: textarea.scrollLeft,
+      selectionStart,
+      selectionEnd,
+    }
   }
 
   function handleOpenSelectionRewriteDialog() {
@@ -196,6 +236,17 @@ export default function SessionsWorkspace({
 
   function handleCloseSelectionRewriteDialog() {
     setIsSelectionRewriteDialogOpen(false)
+  }
+
+  function handleSelectionRewriteInstructionChange(nextValue: string) {
+    setSelectionRewriteInstruction(nextValue)
+    setSelectionRewritePreview(null)
+    setSelectionRewriteError('')
+  }
+
+  function handleSelectionRewritePreviewChange(nextValue: string) {
+    setSelectionRewritePreview(nextValue)
+    setSelectionRewriteError('')
   }
 
   function invalidateSkillGenerationRequest() {
@@ -520,34 +571,40 @@ export default function SessionsWorkspace({
         throw new Error(result.error || '局部修改失败。')
       }
 
-      const nextContent = [
-        generatedSkillContent.slice(0, skillContentSelection.start),
-        result.replacement,
-        generatedSkillContent.slice(skillContentSelection.end),
-      ].join('')
-
-      handleGeneratedSkillContentChange(nextContent)
-
-      const nextSelectionStart = skillContentSelection.start
-      const nextSelectionEnd = skillContentSelection.start + result.replacement.length
-
-      clearSelectedFragment()
-
-      window.requestAnimationFrame(() => {
-        const textarea = generatedSkillContentRef.current
-
-        if (!textarea) {
-          return
-        }
-
-        textarea.focus()
-        textarea.setSelectionRange(nextSelectionStart, nextSelectionEnd)
-      })
+      setSelectionRewritePreview(result.replacement)
     } catch (error) {
       setSelectionRewriteError(error instanceof Error ? error.message : '局部修改失败。')
     } finally {
       setIsRewritingSelection(false)
     }
+  }
+
+  function handleApplyRewritePreview() {
+    if (!skillContentSelection || selectionRewritePreview === null) {
+      return
+    }
+
+    const currentSelectedText = generatedSkillContent.slice(
+      skillContentSelection.start,
+      skillContentSelection.end,
+    )
+
+    if (currentSelectedText !== skillContentSelection.text) {
+      setSelectionRewriteError('当前选区已经变化，请重新选择要修改的内容。')
+      return
+    }
+
+    const nextSelectionStart = skillContentSelection.start
+    const nextSelectionEnd = skillContentSelection.start + selectionRewritePreview.length
+    const nextContent = [
+      generatedSkillContent.slice(0, skillContentSelection.start),
+      selectionRewritePreview,
+      generatedSkillContent.slice(skillContentSelection.end),
+    ].join('')
+
+    queueGeneratedContentViewRestore(nextSelectionStart, nextSelectionEnd)
+    handleGeneratedSkillContentChange(nextContent)
+    clearSelectedFragment()
   }
 
   async function handleFinalizeSkill() {
@@ -952,19 +1009,23 @@ export default function SessionsWorkspace({
                         selection={skillContentSelection}
                         isOpen={isSelectionRewriteDialogOpen}
                         instruction={selectionRewriteInstruction}
+                        replacementPreview={selectionRewritePreview}
                         error={selectionRewriteError}
                         isSubmitting={isRewritingSelection}
                         title="Selected Fragment Rewrite"
-                        description="基于当前选区和会话上下文填写修改意见，AI 只会返回当前片段的替换内容。"
+                        description="基于当前选区和会话上下文生成优化预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
                         placeholder="例如：保留原意，但改成更清晰的步骤式写法。"
-                        submitLabel="Rewrite Selection"
+                        submitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
+                        confirmLabel="确认替换"
                         triggerLabel="打开选区改写弹窗"
-                        onInstructionChange={setSelectionRewriteInstruction}
+                        onInstructionChange={handleSelectionRewriteInstructionChange}
+                        onReplacementPreviewChange={handleSelectionRewritePreviewChange}
                         onOpen={handleOpenSelectionRewriteDialog}
                         onClose={handleCloseSelectionRewriteDialog}
                         onSubmit={() => {
                           void handleRewriteSelection()
                         }}
+                        onConfirmReplace={handleApplyRewritePreview}
                       />
                     </div>
 

@@ -6,34 +6,42 @@ interface SelectionRewriteDialogProps {
   } | null
   isOpen: boolean
   instruction: string
+  replacementPreview: string | null
   error: string
   isSubmitting: boolean
   title: string
   description: string
   placeholder: string
   submitLabel: string
+  confirmLabel: string
   triggerLabel: string
   onInstructionChange: (value: string) => void
+  onReplacementPreviewChange: (value: string) => void
   onOpen: () => void
   onClose: () => void
   onSubmit: () => void
+  onConfirmReplace: () => void
 }
 
 export default function SelectionRewriteDialog({
   selection,
   isOpen,
   instruction,
+  replacementPreview,
   error,
   isSubmitting,
   title,
   description,
   placeholder,
   submitLabel,
+  confirmLabel,
   triggerLabel,
   onInstructionChange,
+  onReplacementPreviewChange,
   onOpen,
   onClose,
   onSubmit,
+  onConfirmReplace,
 }: SelectionRewriteDialogProps) {
   if (!selection) {
     return null
@@ -123,6 +131,20 @@ export default function SelectionRewriteDialog({
               />
             </label>
 
+            {replacementPreview !== null ? (
+              <label className="mt-5 grid gap-2 text-sm">
+                <span className="font-medium">优化预览</span>
+                <textarea
+                  value={replacementPreview}
+                  onChange={(event) => onReplacementPreviewChange(event.target.value)}
+                  rows={10}
+                  disabled={isSubmitting}
+                  className="app-scrollbar min-h-44 w-full resize-y border border-black px-3 py-2 font-mono text-xs leading-6 outline-none transition-colors focus:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500"
+                />
+                <span className="text-xs text-neutral-500">确认前可继续手动编辑这段替换内容。</span>
+              </label>
+            ) : null}
+
             {error ? (
               <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">
                 {error}
@@ -135,9 +157,19 @@ export default function SelectionRewriteDialog({
                 onClick={onSubmit}
                 disabled={isSubmitting}
                 className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-              >
-                {isSubmitting ? 'Rewriting...' : submitLabel}
-              </button>
+                >
+                  {isSubmitting ? 'Rewriting...' : submitLabel}
+                </button>
+              {replacementPreview !== null ? (
+                <button
+                  type="button"
+                  onClick={onConfirmReplace}
+                  disabled={isSubmitting}
+                  className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                >
+                  {confirmLabel}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={handleClose}
