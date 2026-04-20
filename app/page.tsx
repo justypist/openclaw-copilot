@@ -80,7 +80,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600 sm:text-sm">
               <span>{sessions.length} sessions</span>
               <span>{selectedSession?.title ?? 'No session selected'}</span>
-              <time>{formatTimestamp(sessions[0]?.updatedAt)}</time>
+              <time>{formatTimestamp(selectedSession?.updatedAt)}</time>
             </div>
           </div>
         </section>
