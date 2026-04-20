@@ -119,6 +119,17 @@ interface SessionsContext {
   sessionsDirectory: string
 }
 
+function buildEmptySessionsOverview(root: string, sessionsDirectory: string): SessionsOverviewResult {
+  return {
+    ok: true,
+    data: {
+      root,
+      sessionsDirectory,
+      sessions: [],
+    },
+  }
+}
+
 function isSessionContentPart(value: unknown): value is SessionContentPart {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -623,62 +634,58 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
   }
 
   let sessionIndex: Record<string, SessionIndexRecord>
-  const rawIndex = await readFile(sessionsIndexPath, 'utf8')
+  const rawIndex = await readFile(sessionsIndexPath, 'utf8').catch(() => null)
+
+  if (rawIndex === null) {
+    return buildEmptySessionsOverview(root, sessionsDirectory)
+  }
 
   try {
     const parsedIndex = JSON.parse(rawIndex) as unknown
 
     if (!parsedIndex || Array.isArray(parsedIndex) || typeof parsedIndex !== 'object') {
-      return {
-        ok: true,
-        data: {
-          root,
-          sessionsDirectory,
-          sessions: [],
-        },
-      }
+      return buildEmptySessionsOverview(root, sessionsDirectory)
     }
 
     sessionIndex = parsedIndex as Record<string, SessionIndexRecord>
   } catch {
-    return {
-      ok: true,
-      data: {
-        root,
-        sessionsDirectory,
-        sessions: [],
-      },
-    }
+    return buildEmptySessionsOverview(root, sessionsDirectory)
   }
 
   const sessions = await Promise.all(
-    Object.entries(sessionIndex).map(async ([sessionKey, record]) => {
-      if (typeof record?.sessionId !== 'string' || !record.sessionId.trim()) {
+    Object.entries(sessionIndex).map(async ([sessionKey, record]): Promise<SessionSummary | null> => {
+      try {
+        if (typeof record?.sessionId !== 'string' || !record.sessionId.trim()) {
+          return null
+        }
+
+        const sessionFilePath = join(sessionsDirectory, `${record.sessionId}.jsonl`)
+        let parsed: ParsedSessionFile = { messageCount: 0 }
+
+        if (await pathExists(sessionFilePath)) {
+          const contents = await readFile(sessionFilePath, 'utf8').catch(() => null)
+
+          if (contents !== null) {
+            parsed = parseSessionContents(contents)
+          }
+        }
+
+        const session: SessionSummary = {
+          sessionId: record.sessionId,
+          sessionKey,
+          updatedAt: record.updatedAt,
+          startedAt: parsed.startedAt ?? record.startedAt,
+          status: record.status,
+          model: record.model,
+          channel: record.deliveryContext?.channel ?? record.lastChannel,
+          messageCount: parsed.messageCount,
+          title: parsed.title ?? fallbackTitle(sessionKey, record.sessionId),
+        }
+
+        return session
+      } catch {
         return null
       }
-
-      const sessionFilePath = join(sessionsDirectory, `${record.sessionId}.jsonl`)
-      let parsed: ParsedSessionFile = { messageCount: 0 }
-
-      if (await pathExists(sessionFilePath)) {
-        const contents = await readFile(sessionFilePath, 'utf8').catch(() => null)
-
-        if (contents !== null) {
-          parsed = parseSessionContents(contents)
-        }
-      }
-
-      return {
-        sessionId: record.sessionId,
-        sessionKey,
-        updatedAt: record.updatedAt,
-        startedAt: parsed.startedAt ?? record.startedAt,
-        status: record.status,
-        model: record.model,
-        channel: record.deliveryContext?.channel ?? record.lastChannel,
-        messageCount: parsed.messageCount,
-        title: parsed.title ?? fallbackTitle(sessionKey, record.sessionId),
-      } satisfies SessionSummary
     }),
   )
 
