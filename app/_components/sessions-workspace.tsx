@@ -116,6 +116,7 @@ export default function SessionsWorkspace({
   const [isGeneratingSkill, setIsGeneratingSkill] = useState(false)
   const [skillGenerationError, setSkillGenerationError] = useState('')
   const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
+  const [isSelectionRewriteDialogOpen, setIsSelectionRewriteDialogOpen] = useState(false)
   const [selectionRewriteInstruction, setSelectionRewriteInstruction] = useState('')
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
@@ -149,8 +150,22 @@ export default function SessionsWorkspace({
 
   function clearSelectedFragment() {
     setSkillContentSelection(null)
+    setIsSelectionRewriteDialogOpen(false)
     setSelectionRewriteInstruction('')
     setSelectionRewriteError('')
+  }
+
+  function handleOpenSelectionRewriteDialog() {
+    if (!skillContentSelection) {
+      return
+    }
+
+    setSelectionRewriteError('')
+    setIsSelectionRewriteDialogOpen(true)
+  }
+
+  function handleCloseSelectionRewriteDialog() {
+    setIsSelectionRewriteDialogOpen(false)
   }
 
   function invalidateSkillGenerationRequest() {
@@ -858,17 +873,37 @@ export default function SessionsWorkspace({
                       </p>
                     </div>
 
-                    <textarea
-                      ref={generatedSkillContentRef}
-                      value={generatedSkillContent}
-                      onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
-                      onSelect={handleGeneratedContentSelection}
-                      onKeyUp={handleGeneratedContentSelection}
-                      onMouseUp={handleGeneratedContentSelection}
-                      placeholder="生成结果会出现在这里。"
-                      rows={18}
-                      className="app-scrollbar mt-5 min-h-80 w-full resize-y border border-black px-3 py-2 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-                    />
+                    <div className="relative mt-5">
+                      <textarea
+                        ref={generatedSkillContentRef}
+                        value={generatedSkillContent}
+                        onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
+                        onSelect={handleGeneratedContentSelection}
+                        onKeyUp={handleGeneratedContentSelection}
+                        onMouseUp={handleGeneratedContentSelection}
+                        placeholder="生成结果会出现在这里。"
+                        rows={18}
+                        className="app-scrollbar min-h-80 w-full resize-y border border-black px-3 py-2 pr-14 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                      />
+                      <SelectionRewriteDialog
+                        selection={skillContentSelection}
+                        isOpen={isSelectionRewriteDialogOpen}
+                        instruction={selectionRewriteInstruction}
+                        error={selectionRewriteError}
+                        isSubmitting={isRewritingSelection}
+                        title="Selected Fragment Rewrite"
+                        description="基于当前选区和会话上下文填写修改意见，AI 只会返回当前片段的替换内容。"
+                        placeholder="例如：保留原意，但改成更清晰的步骤式写法。"
+                        submitLabel="Rewrite Selection"
+                        triggerLabel="打开选区改写弹窗"
+                        onInstructionChange={setSelectionRewriteInstruction}
+                        onOpen={handleOpenSelectionRewriteDialog}
+                        onClose={handleCloseSelectionRewriteDialog}
+                        onSubmit={() => {
+                          void handleRewriteSelection()
+                        }}
+                      />
+                    </div>
 
                     <div className="mt-4 border border-black bg-neutral-50 p-4">
                       <div className="flex flex-col gap-2">
@@ -978,21 +1013,6 @@ export default function SessionsWorkspace({
                     </section>
                   </div>
                 </div>
-                <SelectionRewriteDialog
-                  selection={skillContentSelection}
-                  instruction={selectionRewriteInstruction}
-                  error={selectionRewriteError}
-                  isSubmitting={isRewritingSelection}
-                  title="Selected Fragment Rewrite"
-                  description="基于当前选区和会话上下文填写修改意见，AI 只会返回当前片段的替换内容。"
-                  placeholder="例如：保留原意，但改成更清晰的步骤式写法。"
-                  submitLabel="Rewrite Selection"
-                  onInstructionChange={setSelectionRewriteInstruction}
-                  onClose={clearSelectedFragment}
-                  onSubmit={() => {
-                    void handleRewriteSelection()
-                  }}
-                />
               </>
             ) : (
               <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
