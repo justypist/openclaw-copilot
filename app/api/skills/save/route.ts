@@ -1,4 +1,3 @@
-import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import type { SkillFileDraft } from '@/lib/skills'
 import { writeFinalizedSkillDraft } from '@/lib/skills'
 
@@ -8,12 +7,6 @@ interface SaveSkillRequestBody {
 }
 
 export async function POST(request: Request) {
-  const accessErrorResponse = requireLocalSkillsApiAccess(request)
-
-  if (accessErrorResponse) {
-    return accessErrorResponse
-  }
-
   let body: SaveSkillRequestBody
 
   try {

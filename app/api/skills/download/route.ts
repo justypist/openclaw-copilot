@@ -1,4 +1,3 @@
-import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import { buildSkillDownloadArchive, type SkillLocation } from '@/lib/skills'
 
 interface SkillReferenceInput {
@@ -15,12 +14,6 @@ function isSkillLocation(value: unknown): value is SkillLocation {
 }
 
 export async function POST(request: Request) {
-  const accessErrorResponse = requireLocalSkillsApiAccess(request)
-
-  if (accessErrorResponse) {
-    return accessErrorResponse
-  }
-
   let body: DownloadSkillsRequestBody
 
   try {

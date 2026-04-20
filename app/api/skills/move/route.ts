@@ -1,4 +1,3 @@
-import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import { moveSkills, type SkillLocation } from '@/lib/skills'
 
 interface MoveSkillsRequestBody {
@@ -11,12 +10,6 @@ function isSkillLocation(value: unknown): value is SkillLocation {
 }
 
 export async function POST(request: Request) {
-  const accessErrorResponse = requireLocalSkillsApiAccess(request)
-
-  if (accessErrorResponse) {
-    return accessErrorResponse
-  }
-
   let body: MoveSkillsRequestBody
 
   try {
