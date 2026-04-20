@@ -502,11 +502,34 @@ export async function moveSkills(input: {
     }
   }
 
-  await Promise.all(
-    skillFolderNames.map((folderName) =>
-      rename(join(sourceDirectory, folderName), join(targetDirectory, folderName)),
-    ),
-  )
+  const movedSkillFolderNames: string[] = []
+
+  try {
+    for (const folderName of skillFolderNames) {
+      await rename(join(sourceDirectory, folderName), join(targetDirectory, folderName))
+      movedSkillFolderNames.push(folderName)
+    }
+  } catch (error) {
+    const rollbackFailedFolderNames: string[] = []
+
+    for (const folderName of [...movedSkillFolderNames].reverse()) {
+      try {
+        await rename(join(targetDirectory, folderName), join(sourceDirectory, folderName))
+      } catch {
+        rollbackFailedFolderNames.push(folderName)
+      }
+    }
+
+    const message = error instanceof Error ? error.message : '转移失败。'
+
+    if (rollbackFailedFolderNames.length > 0) {
+      throw new Error(
+        `转移失败，且以下 skill 回滚失败：${rollbackFailedFolderNames.join('、')}。原始错误：${message}`,
+      )
+    }
+
+    throw new Error(message)
+  }
 
   return {
     movedSkillFolderNames: skillFolderNames,
