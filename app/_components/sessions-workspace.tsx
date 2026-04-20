@@ -91,6 +91,7 @@ export default function SessionsWorkspace({
   const router = useRouter()
   const pathname = usePathname()
   const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
+  const skillGenerationRequestIdRef = useRef(0)
   const [isPending, startTransition] = useTransition()
   const activeSessionId = selectedSession?.sessionId ?? ''
   const [selectionState, setSelectionState] = useState<SelectionState>({
@@ -152,14 +153,49 @@ export default function SessionsWorkspace({
     setSelectionRewriteError('')
   }
 
+  function invalidateSkillGenerationRequest() {
+    skillGenerationRequestIdRef.current += 1
+  }
+
+  function resetSelectionDependentSkillState() {
+    invalidateSkillGenerationRequest()
+    setIsGeneratingSkill(false)
+    setSkillGenerationError('')
+    clearSelectedFragment()
+    setIsRewritingSelection(false)
+    resetFinalizedSkillState()
+  }
+
+  function updateSelectionState(
+    getNextSelectedMessageKeys: (currentKeys: string[]) => string[],
+  ) {
+    resetSelectionDependentSkillState()
+    setSelectionState((currentState) => {
+      const currentKeys =
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : []
+      const nextSelectedMessageKeys = getNextSelectedMessageKeys(currentKeys)
+
+      return {
+        sessionId: activeSessionId,
+        selectedMessageKeys: nextSelectedMessageKeys,
+        hasRequestedSkillCreation:
+          nextSelectedMessageKeys.length > 0 &&
+          currentState.sessionId === activeSessionId &&
+          currentState.hasRequestedSkillCreation,
+        skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
+        skillDescription:
+          currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
+        generatedSkillContent: '',
+      }
+    })
+  }
+
   function handleSelectSession(sessionId: string) {
     if (!sessionId || sessionId === selectedSession?.sessionId) {
       return
     }
 
-    clearSelectedFragment()
-    setIsRewritingSelection(false)
-    resetFinalizedSkillState()
+    resetSelectionDependentSkillState()
 
     startTransition(() => {
       router.push(`${pathname}?session=${encodeURIComponent(sessionId)}`)
@@ -167,49 +203,15 @@ export default function SessionsWorkspace({
   }
 
   function handleToggleMessage(messageKey: string) {
-    setSelectionState((currentState) => {
-      const currentKeys =
-        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : []
-      const nextSkillName =
-        currentState.sessionId === activeSessionId ? currentState.skillName : ''
-      const nextSkillDescription =
-        currentState.sessionId === activeSessionId ? currentState.skillDescription : ''
-      const nextGeneratedSkillContent =
-        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : ''
-
-      if (currentKeys.includes(messageKey)) {
-        return {
-          sessionId: activeSessionId,
-          selectedMessageKeys: currentKeys.filter((key) => key !== messageKey),
-          hasRequestedSkillCreation:
-            currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
-          skillName: nextSkillName,
-          skillDescription: nextSkillDescription,
-          generatedSkillContent: nextGeneratedSkillContent,
-        }
-      }
-
-      return {
-        sessionId: activeSessionId,
-        selectedMessageKeys: [...currentKeys, messageKey],
-        hasRequestedSkillCreation:
-          currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
-        skillName: nextSkillName,
-        skillDescription: nextSkillDescription,
-        generatedSkillContent: nextGeneratedSkillContent,
-      }
-    })
+    updateSelectionState((currentKeys) =>
+      currentKeys.includes(messageKey)
+        ? currentKeys.filter((key) => key !== messageKey)
+        : [...currentKeys, messageKey],
+    )
   }
 
   function handleSelectAll() {
-    setSelectionState({
-      sessionId: activeSessionId,
-      selectedMessageKeys: selectableMessageKeys,
-      hasRequestedSkillCreation,
-      skillName,
-      skillDescription,
-      generatedSkillContent,
-    })
+    updateSelectionState(() => selectableMessageKeys)
   }
 
   function handleClearSelection() {
@@ -357,6 +359,8 @@ export default function SessionsWorkspace({
     setSkillGenerationError('')
     setSelectionRewriteError('')
     resetFinalizedSkillState()
+    const requestId = skillGenerationRequestIdRef.current + 1
+    skillGenerationRequestIdRef.current = requestId
 
     try {
       const response = await fetch('/api/skills/generate', {
@@ -378,6 +382,10 @@ export default function SessionsWorkspace({
         error?: string
       }
 
+      if (requestId !== skillGenerationRequestIdRef.current) {
+        return
+      }
+
       if (!response.ok || !result.content) {
         throw new Error(result.error || '生成失败。')
       }
@@ -385,9 +393,15 @@ export default function SessionsWorkspace({
       handleGeneratedSkillContentChange(result.content)
       clearSelectedFragment()
     } catch (error) {
+      if (requestId !== skillGenerationRequestIdRef.current) {
+        return
+      }
+
       setSkillGenerationError(error instanceof Error ? error.message : '生成失败。')
     } finally {
-      setIsGeneratingSkill(false)
+      if (requestId === skillGenerationRequestIdRef.current) {
+        setIsGeneratingSkill(false)
+      }
     }
   }
 
