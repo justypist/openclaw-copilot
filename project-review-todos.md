@@ -1,7 +1,7 @@
 # 项目审查待处理项
 
 ## 高优先级
-- [ ] 移除 `instrumentation.ts:1-5` 中对 `config` 的 `console.log`，避免将 `AI_API_KEY`、`OPENCLAW_ROOT` 等敏感配置写入服务端日志。
+- [x] 移除 `instrumentation.ts:1-5` 中对 `config` 的 `console.log`，避免将 `AI_API_KEY`、`OPENCLAW_ROOT` 等敏感配置写入服务端日志。
 
 ## 中优先级
 - [ ] 修复 `lib/skills.ts:592-605` 与 `app/api/skills/save/route.ts:18-24` 的保存逻辑：重复保存 skill 时需要清理旧目录中的遗留文件，避免磁盘内容与编辑器内容不一致。
