@@ -119,6 +119,10 @@ interface SessionsContext {
   sessionsDirectory: string
 }
 
+function isSessionContentPart(value: unknown): value is SessionContentPart {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 const MAX_TITLE_LENGTH = 80
 
 function getSessionsDirectory(root: string): string {
@@ -135,11 +139,12 @@ async function pathExists(path: string): Promise<boolean> {
 }
 
 function extractText(content: SessionContentPart[] | undefined): string {
-  if (!content) {
+  if (!Array.isArray(content)) {
     return ''
   }
 
   return content
+    .filter(isSessionContentPart)
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text?.trim() ?? '')
     .filter(Boolean)
@@ -209,11 +214,12 @@ function fallbackTitle(sessionKey: string, sessionId: string): string {
 }
 
 function extractTextParts(content: SessionContentPart[] | undefined): string[] {
-  if (!content) {
+  if (!Array.isArray(content)) {
     return []
   }
 
   return content
+    .filter(isSessionContentPart)
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text?.trim() ?? '')
     .filter(Boolean)
@@ -386,7 +392,9 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
 
   const speaker: 'user' | 'assistant' = role
   const entries: SessionMessage[] = []
-  const content = record.message?.content ?? []
+  const content = Array.isArray(record.message?.content)
+    ? record.message.content.filter(isSessionContentPart)
+    : []
   let textParts: string[] = []
   let textIndex = 0
   let thinkingIndex = 0
@@ -463,13 +471,12 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
   return entries
 }
 
-async function parseSessionFile(
-  sessionFilePath: string,
+function parseSessionContents(
+  contents: string,
   options?: {
     includeMessages?: boolean
   },
-): Promise<ParsedSessionFile> {
-  const contents = await readFile(sessionFilePath, 'utf8')
+): ParsedSessionFile {
   const lines = contents.split('\n').filter(Boolean)
 
   let startedAt: number | undefined
@@ -481,7 +488,13 @@ async function parseSessionFile(
     let record: SessionFileRecord
 
     try {
-      record = JSON.parse(line) as SessionFileRecord
+      const parsedRecord = JSON.parse(line) as unknown
+
+      if (!parsedRecord || typeof parsedRecord !== 'object' || Array.isArray(parsedRecord)) {
+        continue
+      }
+
+      record = parsedRecord as SessionFileRecord
     } catch {
       continue
     }
@@ -529,6 +542,17 @@ async function parseSessionFile(
     messageCount,
     messages,
   }
+}
+
+async function parseSessionFile(
+  sessionFilePath: string,
+  options?: {
+    includeMessages?: boolean
+  },
+): Promise<ParsedSessionFile> {
+  const contents = await readFile(sessionFilePath, 'utf8')
+
+  return parseSessionContents(contents, options)
 }
 
 async function resolveSessionsContext(): Promise<
@@ -598,15 +622,51 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
     }
   }
 
+  let sessionIndex: Record<string, SessionIndexRecord>
   const rawIndex = await readFile(sessionsIndexPath, 'utf8')
-  const sessionIndex = JSON.parse(rawIndex) as Record<string, SessionIndexRecord>
+
+  try {
+    const parsedIndex = JSON.parse(rawIndex) as unknown
+
+    if (!parsedIndex || Array.isArray(parsedIndex) || typeof parsedIndex !== 'object') {
+      return {
+        ok: true,
+        data: {
+          root,
+          sessionsDirectory,
+          sessions: [],
+        },
+      }
+    }
+
+    sessionIndex = parsedIndex as Record<string, SessionIndexRecord>
+  } catch {
+    return {
+      ok: true,
+      data: {
+        root,
+        sessionsDirectory,
+        sessions: [],
+      },
+    }
+  }
 
   const sessions = await Promise.all(
     Object.entries(sessionIndex).map(async ([sessionKey, record]) => {
+      if (typeof record?.sessionId !== 'string' || !record.sessionId.trim()) {
+        return null
+      }
+
       const sessionFilePath = join(sessionsDirectory, `${record.sessionId}.jsonl`)
-      const parsed = (await pathExists(sessionFilePath))
-        ? await parseSessionFile(sessionFilePath)
-        : { messageCount: 0 }
+      let parsed: ParsedSessionFile = { messageCount: 0 }
+
+      if (await pathExists(sessionFilePath)) {
+        const contents = await readFile(sessionFilePath, 'utf8').catch(() => null)
+
+        if (contents !== null) {
+          parsed = parseSessionContents(contents)
+        }
+      }
 
       return {
         sessionId: record.sessionId,
@@ -622,12 +682,14 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
     }),
   )
 
+  const validSessions = sessions.filter((session): session is SessionSummary => session !== null)
+
   return {
     ok: true,
     data: {
       root,
       sessionsDirectory,
-      sessions: sessions.toSorted((left, right) => right.updatedAt - left.updatedAt),
+      sessions: validSessions.toSorted((left, right) => right.updatedAt - left.updatedAt),
     },
   }
 }
