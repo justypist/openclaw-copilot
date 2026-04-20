@@ -15,4 +15,4 @@
 
 ## 低优先级
 - [x] 修复 `app/page.tsx:80-83` 的顶部摘要显示错误，当前展示的是选中会话标题，但时间却固定取 `sessions[0]?.updatedAt`。
-- [ ] 优化 `app/_components/selection-rewrite-dialog.tsx:37-40`、`54-60`、`91-106` 的交互；改写提交中不应允许用户误以为已取消，但请求返回后仍悄悄改写正文。
+- [x] 优化 `app/_components/selection-rewrite-dialog.tsx:37-40`、`54-60`、`91-106` 的交互；改写提交中不应允许用户误以为已取消，但请求返回后仍悄悄改写正文。

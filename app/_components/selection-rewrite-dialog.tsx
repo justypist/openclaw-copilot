@@ -33,15 +33,24 @@ export default function SelectionRewriteDialog({
     return null
   }
 
+  function handleClose() {
+    if (isSubmitting) {
+      return
+    }
+
+    onClose()
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        aria-busy={isSubmitting}
         className="app-scrollbar max-h-full w-full max-w-3xl overflow-y-auto border border-black bg-white p-4 shadow-[8px_8px_0_0_#000] sm:p-5"
         onClick={(event) => event.stopPropagation()}
       >
@@ -53,8 +62,9 @@ export default function SelectionRewriteDialog({
 
           <button
             type="button"
-            onClick={onClose}
-            className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100"
+            onClick={handleClose}
+            disabled={isSubmitting}
+            className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
           >
             关闭
           </button>
@@ -78,7 +88,8 @@ export default function SelectionRewriteDialog({
             placeholder={placeholder}
             rows={5}
             autoFocus
-            className="app-scrollbar min-h-28 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+            disabled={isSubmitting}
+            className="app-scrollbar min-h-28 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500"
           />
         </label>
 
@@ -99,8 +110,9 @@ export default function SelectionRewriteDialog({
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+            onClick={handleClose}
+            disabled={isSubmitting}
+            className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400"
           >
             取消
           </button>
