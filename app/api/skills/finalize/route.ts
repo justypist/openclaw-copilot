@@ -2,9 +2,9 @@ import { streamText, Output } from 'ai'
 import { z } from 'zod'
 
 import { options } from '@/lib/ai'
-import type { SessionMessage } from '@/lib/openclaw/sessions'
 import {
   buildConversationContext,
+  isSessionMessageArray,
   slugifySkillName,
   validateFinalizedSkillDraft,
 } from '@/lib/skills'
@@ -29,10 +29,6 @@ const finalizedSkillSchema = z.object({
     )
     .min(1),
 })
-
-function isSessionMessageArray(value: unknown): value is SessionMessage[] {
-  return Array.isArray(value)
-}
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -65,8 +61,12 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少完整 skill 内容。' }, { status: 400 })
   }
 
-  if (!isSessionMessageArray(body.selectedMessages) || body.selectedMessages.length === 0) {
+  if (!Array.isArray(body.selectedMessages) || body.selectedMessages.length === 0) {
     return Response.json({ error: '缺少选中的聊天记录。' }, { status: 400 })
+  }
+
+  if (!isSessionMessageArray(body.selectedMessages)) {
+    return Response.json({ error: '选中的聊天记录格式不合法。' }, { status: 400 })
   }
 
   const conversationContext = buildConversationContext(body.selectedMessages)

@@ -6,6 +6,20 @@ import { promisify } from 'node:util'
 import { config } from '@/config'
 import type { SessionMessage } from '@/lib/openclaw/sessions'
 
+const SESSION_MESSAGE_ROLES = new Set<SessionMessage['role']>([
+  'user',
+  'assistant',
+  'thinking',
+  'tool-call',
+  'tool-result',
+  'session',
+  'model-change',
+  'thinking-level-change',
+  'custom',
+  'content-part',
+  'event',
+])
+
 export interface SkillFileDraft {
   path: string
   content: string
@@ -56,6 +70,34 @@ function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function isValidSessionTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && Number.isFinite(new Date(value).getTime())
+}
+
+export function isSessionMessage(value: unknown): value is SessionMessage {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+
+  return (
+    typeof candidate.id === 'string' &&
+    SESSION_MESSAGE_ROLES.has(candidate.role as SessionMessage['role']) &&
+    typeof candidate.text === 'string' &&
+    (candidate.timestamp === undefined || isValidSessionTimestamp(candidate.timestamp)) &&
+    (candidate.toolName === undefined || typeof candidate.toolName === 'string') &&
+    (candidate.toolCallId === undefined || typeof candidate.toolCallId === 'string') &&
+    (candidate.isError === undefined || typeof candidate.isError === 'boolean') &&
+    (candidate.label === undefined || typeof candidate.label === 'string') &&
+    (candidate.details === undefined || typeof candidate.details === 'string')
+  )
+}
+
+export function isSessionMessageArray(value: unknown): value is SessionMessage[] {
+  return Array.isArray(value) && value.every(isSessionMessage)
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path)
@@ -74,7 +116,7 @@ export function formatSessionMessage(message: SessionMessage, index: number): st
     lines.push(`- label: ${message.label}`)
   }
 
-  if (message.timestamp) {
+  if (isValidSessionTimestamp(message.timestamp)) {
     lines.push(`- timestamp: ${new Date(message.timestamp).toISOString()}`)
   }
 
