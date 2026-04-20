@@ -131,6 +131,7 @@
 - 不要直接信任 `sessions.json` 里的 `sessionFile` 绝对路径。
 - 当前实现是根据 `sessionId` 自行拼本地路径：`<sessionsDirectory>/<sessionId>.jsonl`
 - 这样可以规避索引里 `/home/node/.openclaw/...` 与本机真实路径不一致的问题。
+- `/api/skills/*` 当前默认仅允许本机访问（`localhost` / `127.0.0.1` / `::1`），避免这些可读会话、写本地文件、触发 AI 调用的接口被直接暴露到外网。
 
 ## 当前解析规则
 

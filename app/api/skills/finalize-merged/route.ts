@@ -2,6 +2,7 @@ import { streamText, Output } from 'ai'
 import { z } from 'zod'
 
 import { options } from '@/lib/ai'
+import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import {
   buildSkillSourcesContextForAi,
   getSkillSources,
@@ -64,6 +65,12 @@ function parseSkillReferences(value: unknown): Array<{ folderName: string; locat
 }
 
 export async function POST(request: Request) {
+  const accessErrorResponse = requireLocalSkillsApiAccess(request)
+
+  if (accessErrorResponse) {
+    return accessErrorResponse
+  }
+
   let body: FinalizeMergedSkillRequestBody
 
   try {

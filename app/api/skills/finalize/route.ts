@@ -2,6 +2,7 @@ import { streamText, Output } from 'ai'
 import { z } from 'zod'
 
 import { options } from '@/lib/ai'
+import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import {
   buildConversationContextForAi,
   isSessionMessageArray,
@@ -37,6 +38,12 @@ function normalizeText(value: unknown): string {
 }
 
 export async function POST(request: Request) {
+  const accessErrorResponse = requireLocalSkillsApiAccess(request)
+
+  if (accessErrorResponse) {
+    return accessErrorResponse
+  }
+
   let body: FinalizeSkillRequestBody
 
   try {

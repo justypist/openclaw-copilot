@@ -11,7 +11,7 @@
 - [x] 提升 `lib/openclaw/sessions.ts:601-623` 的容错性，为 `sessions.json` 解析失败和单个 session 文件读取失败提供降级处理，避免一个坏文件拖垮整个首页。
 - [x] 调整 `lib/skills.ts:447-467` 的批量移动逻辑，避免 `Promise.all(rename(...))` 在部分失败时留下半完成状态。
 - [x] 为所有 AI 路由增加输入规模限制，控制 `selectedMessages`、`fullContent`、`sourcesContext` 的长度，避免上下文超限、超时或成本失控。
-- [ ] 为 `/api/skills/*` 路由补充鉴权或访问限制；当前仓库未看到 `middleware.ts`，而这些接口具备读会话、写本地文件、触发 AI 调用的能力，若服务暴露到外网会有明显安全风险。
+- [x] 为 `/api/skills/*` 路由补充鉴权或访问限制；当前仓库未看到 `middleware.ts`，而这些接口具备读会话、写本地文件、触发 AI 调用的能力，若服务暴露到外网会有明显安全风险。
 
 ## 低优先级
 - [ ] 修复 `app/page.tsx:80-83` 的顶部摘要显示错误，当前展示的是选中会话标题，但时间却固定取 `sessions[0]?.updatedAt`。

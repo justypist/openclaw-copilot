@@ -1,5 +1,6 @@
 import { streamText } from 'ai'
 
+import { requireLocalSkillsApiAccess } from '@/lib/skills-api-access'
 import { options } from '@/lib/ai'
 import { buildConversationContextForAi, isSessionMessageArray, SkillsInputError } from '@/lib/skills'
 
@@ -16,6 +17,12 @@ function normalizeText(value: unknown): string {
 }
 
 export async function POST(request: Request) {
+  const accessErrorResponse = requireLocalSkillsApiAccess(request)
+
+  if (accessErrorResponse) {
+    return accessErrorResponse
+  }
+
   let body: GenerateSkillRequestBody
 
   try {
