@@ -236,10 +236,16 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     resetFinalizedSkillState()
   }
 
+  function resetSelectedSkillsDependentMergeState() {
+    resetMergeEditorState()
+    setHasRequestedMerge(false)
+  }
+
   function toggleSelectedFolderName(location: SkillLocation, folderName: string) {
     const setter =
       location === 'available' ? setSelectedAvailableFolderNames : setSelectedEnabledFolderNames
 
+    resetSelectedSkillsDependentMergeState()
     setMoveError('')
     setMoveSummary('')
     setDownloadError('')
@@ -336,8 +342,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   }
 
   function handleFinishMergeFlow() {
-    resetMergeEditorState()
-    setHasRequestedMerge(false)
+    resetSelectedSkillsDependentMergeState()
   }
 
   async function handleMoveSkills(from: SkillLocation) {
