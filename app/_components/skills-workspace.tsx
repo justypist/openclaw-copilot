@@ -58,6 +58,63 @@ interface SkillColumnProps {
   selectedFolderNames: string[]
   disabled: boolean
   onToggle: (folderName: string) => void
+  onPreview: (skill: SkillSummary) => void
+}
+
+interface SkillPreviewDialogProps {
+  skill: SkillSummary | null
+  onClose: () => void
+}
+
+function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) {
+  if (!skill) {
+    return null
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${skill.name} preview`}
+        className="app-scrollbar max-h-full w-full max-w-5xl overflow-y-auto border border-black bg-white p-4 shadow-[8px_8px_0_0_#000] sm:p-5"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium tracking-[-0.02em]">{skill.name}</h3>
+            <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">
+              {skill.location}:{skill.folderName}
+            </p>
+            <p className="mt-2 text-sm text-neutral-600">{skill.description}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100"
+          >
+            关闭
+          </button>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
+          <time>{formatTimestamp(skill.updatedAt)}</time>
+          <span>{skill.filePaths.join(', ')}</span>
+        </div>
+
+        <div className="mt-5 border border-black bg-neutral-50 p-3">
+          <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+            <span>SKILL.md</span>
+            <span>{skill.skillContent.length} chars</span>
+          </div>
+          <pre className="app-scrollbar mt-3 max-h-[70vh] overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
+            {skill.skillContent || 'SKILL.md 为空。'}
+          </pre>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function SkillColumn({
@@ -67,6 +124,7 @@ function SkillColumn({
   selectedFolderNames,
   disabled,
   onToggle,
+  onPreview,
 }: SkillColumnProps) {
   const selectedFolderNameSet = new Set(selectedFolderNames)
 
@@ -92,12 +150,12 @@ function SkillColumn({
               const isSelected = selectedFolderNameSet.has(skill.folderName)
 
               return (
-                <label
+                <div
                   key={`${skill.location}:${skill.folderName}`}
                   className={[
-                    'grid cursor-pointer gap-3 border border-black p-3 transition-colors',
+                    'grid gap-3 border border-black p-3 transition-colors',
                     isSelected ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100',
-                    disabled ? 'cursor-not-allowed opacity-60' : '',
+                    disabled ? 'opacity-60' : '',
                   ].join(' ')}
                 >
                   <div className="flex items-start gap-3">
@@ -109,7 +167,12 @@ function SkillColumn({
                       className="mt-0.5 h-4 w-4 accent-black"
                     />
 
-                    <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={() => onToggle(skill.folderName)}
+                      disabled={disabled}
+                      className="min-w-0 flex-1 text-left disabled:cursor-not-allowed"
+                    >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium">{skill.name}</p>
@@ -151,9 +214,24 @@ function SkillColumn({
                         <time>{formatTimestamp(skill.updatedAt)}</time>
                         <span>{skill.filePaths.join(', ')}</span>
                       </div>
-                    </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onPreview(skill)}
+                      disabled={disabled}
+                      className={[
+                        'shrink-0 border px-3 py-1.5 text-xs transition-colors',
+                        isSelected
+                          ? 'border-white text-white hover:bg-neutral-800'
+                          : 'border-black text-black hover:bg-neutral-200',
+                        disabled ? 'cursor-not-allowed opacity-60' : '',
+                      ].join(' ')}
+                    >
+                      预览
+                    </button>
                   </div>
-                </label>
+                </div>
               )
             })}
           </div>
@@ -192,6 +270,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   const [isSavingSkill, setIsSavingSkill] = useState(false)
   const [skillSaveError, setSkillSaveError] = useState('')
   const [savedSkillDirectory, setSavedSkillDirectory] = useState('')
+  const [previewSkill, setPreviewSkill] = useState<SkillSummary | null>(null)
 
   const selectedSkills = useMemo<SkillReference[]>(
     () => [
@@ -409,6 +488,14 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
   function handleFinishMergeFlow() {
     resetSelectedSkillsDependentMergeState()
+  }
+
+  function handleOpenPreview(skill: SkillSummary) {
+    setPreviewSkill(skill)
+  }
+
+  function handleClosePreview() {
+    setPreviewSkill(null)
   }
 
   async function handleMoveSkills(from: SkillLocation) {
@@ -812,6 +899,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
   return (
     <div className="grid gap-4">
+      <SkillPreviewDialog skill={previewSkill} onClose={handleClosePreview} />
+
       <section className="border border-black bg-white px-4 py-3 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -1101,6 +1190,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             selectedFolderNames={selectedAvailableFolderNames}
             disabled={interactionDisabled}
             onToggle={(folderName) => toggleSelectedFolderName('available', folderName)}
+            onPreview={handleOpenPreview}
           />
 
           <SkillColumn
@@ -1110,6 +1200,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             selectedFolderNames={selectedEnabledFolderNames}
             disabled={interactionDisabled}
             onToggle={(folderName) => toggleSelectedFolderName('enabled', folderName)}
+            onPreview={handleOpenPreview}
           />
         </section>
       )}

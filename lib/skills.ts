@@ -49,6 +49,7 @@ export interface SkillSummary {
   location: SkillLocation
   name: string
   description: string
+  skillContent: string
   filePaths: string[]
   updatedAt?: number
 }
@@ -353,6 +354,7 @@ async function listSkillsFromDirectory(
           location,
           name: metadata.name,
           description: metadata.description,
+          skillContent: content,
           filePaths,
           updatedAt: skillStat.mtimeMs,
         } satisfies SkillSummary
@@ -395,6 +397,7 @@ async function readSkillSource(
     location,
     name: metadata.name,
     description: metadata.description,
+    skillContent: files.find((file) => file.path === 'SKILL.md')?.content ?? '',
     filePaths,
     updatedAt: skillStat.mtimeMs,
     files,
