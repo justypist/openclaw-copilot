@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation'
 
 import type { FinalizedSkillDraft, SkillFileDraft, SkillLocation, SkillSummary } from '@/lib/skills'
 
-import SelectionRewriteDialog from './selection-rewrite-dialog'
+import SkillContentEditor from './skill-content-editor'
 
 interface SkillsWorkspaceProps {
   availableSkills: SkillSummary[]
@@ -62,56 +62,433 @@ interface SkillColumnProps {
 }
 
 interface SkillPreviewDialogProps {
-  skill: SkillSummary | null
+  skill: SkillSummary
   onClose: () => void
 }
 
 function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) {
-  if (!skill) {
-    return null
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+  const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
+  const pendingTextareaViewStateRef = useRef<TextareaViewState | null>(null)
+  const [currentSkill, setCurrentSkill] = useState(skill)
+  const [isEditing, setIsEditing] = useState(false)
+  const [draftContent, setDraftContent] = useState(skill.skillContent)
+  const [isSavingSkill, setIsSavingSkill] = useState(false)
+  const [skillSaveError, setSkillSaveError] = useState('')
+  const [skillSaveSummary, setSkillSaveSummary] = useState('')
+  const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
+  const [isSelectionRewriteDialogOpen, setIsSelectionRewriteDialogOpen] = useState(false)
+  const [selectionRewriteInstruction, setSelectionRewriteInstruction] = useState('')
+  const [selectionRewritePreview, setSelectionRewritePreview] = useState<string | null>(null)
+  const [selectionRewriteError, setSelectionRewriteError] = useState('')
+  const [isRewritingSelection, setIsRewritingSelection] = useState(false)
+
+  useLayoutEffect(() => {
+    const textarea = generatedSkillContentRef.current
+    const pendingViewState = pendingTextareaViewStateRef.current
+
+    if (!textarea || !pendingViewState) {
+      return
+    }
+
+    pendingTextareaViewStateRef.current = null
+    textarea.focus()
+    textarea.setSelectionRange(pendingViewState.selectionStart, pendingViewState.selectionEnd)
+    textarea.scrollTop = pendingViewState.scrollTop
+    textarea.scrollLeft = pendingViewState.scrollLeft
+  }, [draftContent])
+
+  const activeSkill = currentSkill
+  const hasUnsavedChanges = draftContent !== activeSkill.skillContent
+
+  function clearSelectedFragment() {
+    setSkillContentSelection(null)
+    setIsSelectionRewriteDialogOpen(false)
+    setSelectionRewriteInstruction('')
+    setSelectionRewritePreview(null)
+    setSelectionRewriteError('')
+  }
+
+  function queueGeneratedContentViewRestore(selectionStart: number, selectionEnd: number) {
+    const textarea = generatedSkillContentRef.current
+
+    if (!textarea) {
+      return
+    }
+
+    pendingTextareaViewStateRef.current = {
+      scrollTop: textarea.scrollTop,
+      scrollLeft: textarea.scrollLeft,
+      selectionStart,
+      selectionEnd,
+    }
+  }
+
+  function handleDialogClose() {
+    if (isSavingSkill || isRewritingSelection) {
+      return
+    }
+
+    onClose()
+  }
+
+  function handleOpenSelectionRewriteDialog() {
+    if (!skillContentSelection) {
+      return
+    }
+
+    setSelectionRewriteError('')
+    setIsSelectionRewriteDialogOpen(true)
+  }
+
+  function handleCloseSelectionRewriteDialog() {
+    if (isRewritingSelection) {
+      return
+    }
+
+    setIsSelectionRewriteDialogOpen(false)
+  }
+
+  function handleSelectionRewriteInstructionChange(nextValue: string) {
+    setSelectionRewriteInstruction(nextValue)
+    setSelectionRewritePreview(null)
+    setSelectionRewriteError('')
+  }
+
+  function handleSelectionRewritePreviewChange(nextValue: string) {
+    setSelectionRewritePreview(nextValue)
+    setSelectionRewriteError('')
+  }
+
+  function handleDraftContentChange(nextValue: string) {
+    setDraftContent(nextValue)
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+
+    if (
+      skillContentSelection &&
+      nextValue.slice(skillContentSelection.start, skillContentSelection.end) !== skillContentSelection.text
+    ) {
+      clearSelectedFragment()
+    }
+  }
+
+  function handleGeneratedContentSelection() {
+    const textarea = generatedSkillContentRef.current
+
+    if (!textarea) {
+      return
+    }
+
+    const selectionStart = textarea.selectionStart
+    const selectionEnd = textarea.selectionEnd
+
+    if (selectionStart === selectionEnd) {
+      clearSelectedFragment()
+      return
+    }
+
+    const selectedText = textarea.value.slice(selectionStart, selectionEnd)
+
+    if (!selectedText.trim()) {
+      clearSelectedFragment()
+      return
+    }
+
+    setSkillContentSelection({
+      start: selectionStart,
+      end: selectionEnd,
+      text: selectedText,
+    })
+    setSelectionRewriteError('')
+  }
+
+  function handleStartEditing() {
+    setIsEditing(true)
+    setDraftContent(activeSkill.skillContent)
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleResetDraft() {
+    setDraftContent(activeSkill.skillContent)
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleCancelEditing() {
+    handleResetDraft()
+    setIsEditing(false)
+  }
+
+  async function handleRewriteSelection() {
+    if (!skillContentSelection) {
+      return
+    }
+
+    const trimmedInstruction = selectionRewriteInstruction.trim()
+
+    if (!trimmedInstruction) {
+      setSelectionRewriteError('请先填写修改意见。')
+      return
+    }
+
+    const currentSelectedText = draftContent.slice(skillContentSelection.start, skillContentSelection.end)
+
+    if (currentSelectedText !== skillContentSelection.text) {
+      setSelectionRewriteError('当前选区已经变化，请重新选择要修改的内容。')
+      return
+    }
+
+    setIsRewritingSelection(true)
+    setSelectionRewriteError('')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+
+    try {
+      const response = await fetch('/api/skills/rewrite-merged-selection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: activeSkill.name,
+          description: activeSkill.description,
+          fullContent: draftContent,
+          selectedText: skillContentSelection.text,
+          instruction: trimmedInstruction,
+          selectedSkills: [
+            {
+              folderName: activeSkill.folderName,
+              location: activeSkill.location,
+            },
+          ],
+        }),
+      })
+
+      const result = (await response.json()) as {
+        replacement?: string
+        error?: string
+      }
+
+      if (!response.ok || typeof result.replacement !== 'string') {
+        throw new Error(result.error || '局部修改失败。')
+      }
+
+      setSelectionRewritePreview(result.replacement)
+    } catch (error) {
+      setSelectionRewriteError(error instanceof Error ? error.message : '局部修改失败。')
+    } finally {
+      setIsRewritingSelection(false)
+    }
+  }
+
+  function handleApplyRewritePreview() {
+    if (!skillContentSelection || selectionRewritePreview === null) {
+      return
+    }
+
+    const currentSelectedText = draftContent.slice(skillContentSelection.start, skillContentSelection.end)
+
+    if (currentSelectedText !== skillContentSelection.text) {
+      setSelectionRewriteError('当前选区已经变化，请重新选择要修改的内容。')
+      return
+    }
+
+    const nextSelectionStart = skillContentSelection.start
+    const nextSelectionEnd = skillContentSelection.start + selectionRewritePreview.length
+    const nextContent = [
+      draftContent.slice(0, skillContentSelection.start),
+      selectionRewritePreview,
+      draftContent.slice(skillContentSelection.end),
+    ].join('')
+
+    queueGeneratedContentViewRestore(nextSelectionStart, nextSelectionEnd)
+    handleDraftContentChange(nextContent)
+    clearSelectedFragment()
+  }
+
+  async function handleSaveSkill() {
+    const trimmedDraftContent = draftContent.trim()
+
+    if (!trimmedDraftContent) {
+      setSkillSaveError('请先填写完整 SKILL.md 内容。')
+      return
+    }
+
+    setIsSavingSkill(true)
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+
+    try {
+      const response = await fetch('/api/skills/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          folderName: activeSkill.folderName,
+          location: activeSkill.location,
+          content: trimmedDraftContent,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        skill?: SkillSummary
+        error?: string
+      }
+
+      if (!response.ok || !result.skill) {
+        throw new Error(result.error || '保存失败。')
+      }
+
+      setCurrentSkill(result.skill)
+      setDraftContent(result.skill.skillContent)
+      setIsEditing(false)
+      clearSelectedFragment()
+      setSkillSaveSummary(`已保存 ${result.skill.location}:${result.skill.folderName}。`)
+
+      startTransition(() => {
+        router.refresh()
+      })
+    } catch (error) {
+      setSkillSaveError(error instanceof Error ? error.message : '保存失败。')
+    } finally {
+      setIsSavingSkill(false)
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={handleDialogClose}>
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`${skill.name} preview`}
+        aria-label={`${activeSkill.name} preview`}
+        aria-busy={isSavingSkill || isRewritingSelection || isPending}
         className="app-scrollbar max-h-full w-full max-w-5xl overflow-y-auto border border-black bg-white p-4 shadow-[8px_8px_0_0_#000] sm:p-5"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h3 className="text-sm font-medium tracking-[-0.02em]">{skill.name}</h3>
+            <h3 className="text-sm font-medium tracking-[-0.02em]">{activeSkill.name}</h3>
             <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">
-              {skill.location}:{skill.folderName}
+              {activeSkill.location}:{activeSkill.folderName}
             </p>
-            <p className="mt-2 text-sm text-neutral-600">{skill.description}</p>
+            <p className="mt-2 text-sm text-neutral-600">{activeSkill.description}</p>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100"
-          >
-            关闭
-          </button>
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {isEditing ? (
+              <button
+                type="button"
+                onClick={handleCancelEditing}
+                disabled={isSavingSkill || isRewritingSelection}
+                className="border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+              >
+                放弃编辑
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartEditing}
+                disabled={isSavingSkill || isRewritingSelection}
+                className="border border-black bg-black px-3 py-1.5 text-sm text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
+              >
+                编辑
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleDialogClose}
+              disabled={isSavingSkill || isRewritingSelection}
+              className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+            >
+              关闭
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
-          <time>{formatTimestamp(skill.updatedAt)}</time>
-          <span>{skill.filePaths.join(', ')}</span>
+          <time>{formatTimestamp(activeSkill.updatedAt)}</time>
+          <span>{activeSkill.filePaths.join(', ')}</span>
         </div>
 
-        <div className="mt-5 border border-black bg-neutral-50 p-3">
-          <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-            <span>SKILL.md</span>
-            <span>{skill.skillContent.length} chars</span>
+        {skillSaveError ? <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">{skillSaveError}</div> : null}
+        {skillSaveSummary ? (
+          <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">{skillSaveSummary}</div>
+        ) : null}
+
+        {isEditing ? (
+          <div className="mt-5 border border-black bg-neutral-50 p-4 sm:p-5">
+            <SkillContentEditor
+              title="Edit SKILL.md"
+              description="支持直接手动编辑，也支持先在正文中选区，再让 AI 只改写该片段。"
+              value={draftContent}
+              placeholder="SKILL.md 内容会显示在这里。"
+              textareaRef={generatedSkillContentRef}
+              selection={skillContentSelection}
+              isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
+              selectionRewriteInstruction={selectionRewriteInstruction}
+              selectionRewritePreview={selectionRewritePreview}
+              selectionRewriteError={selectionRewriteError}
+              isRewritingSelection={isRewritingSelection}
+              selectionRewriteTitle="Selected Fragment Rewrite"
+              selectionRewriteDescription="基于当前 skill 正文和源文件上下文生成局部改写预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
+              selectionRewritePlaceholder="例如：保留原意，但把重复步骤改成更清晰的分点说明。"
+              selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
+              selectionRewriteConfirmLabel="确认替换"
+              selectionRewriteTriggerLabel="打开选区改写弹窗"
+              onChange={handleDraftContentChange}
+              onSelectionChange={handleGeneratedContentSelection}
+              onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
+              onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
+              onOpenSelectionRewriteDialog={handleOpenSelectionRewriteDialog}
+              onCloseSelectionRewriteDialog={handleCloseSelectionRewriteDialog}
+              onRewriteSelection={() => {
+                void handleRewriteSelection()
+              }}
+              onApplyRewritePreview={handleApplyRewritePreview}
+            />
+
+            <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-white p-3 text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleSaveSkill()
+                }}
+                disabled={isSavingSkill || isRewritingSelection}
+                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+              >
+                {isSavingSkill ? 'Saving...' : '保存修改'}
+              </button>
+              <button
+                type="button"
+                onClick={handleResetDraft}
+                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+              >
+                重置到已保存版本
+              </button>
+              <span className="text-neutral-500">
+                {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
+              </span>
+            </div>
           </div>
-          <pre className="app-scrollbar mt-3 max-h-[70vh] overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-            {skill.skillContent || 'SKILL.md 为空。'}
-          </pre>
-        </div>
+        ) : (
+          <div className="mt-5 border border-black bg-neutral-50 p-3">
+            <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+              <span>SKILL.md</span>
+              <span>{activeSkill.skillContent.length} chars</span>
+            </div>
+            <pre className="app-scrollbar mt-3 max-h-[70vh] overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
+              {activeSkill.skillContent || 'SKILL.md 为空。'}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -899,7 +1276,13 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
   return (
     <div className="grid gap-4">
-      <SkillPreviewDialog skill={previewSkill} onClose={handleClosePreview} />
+      {previewSkill ? (
+        <SkillPreviewDialog
+          key={`${previewSkill.location}:${previewSkill.folderName}:${previewSkill.updatedAt ?? 0}`}
+          skill={previewSkill}
+          onClose={handleClosePreview}
+        />
+      ) : null}
 
       <section className="border border-black bg-white px-4 py-3 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1037,48 +1420,35 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
           </section>
 
           <section className="border border-black bg-white p-4 sm:p-5">
-            <div className="flex flex-col gap-2">
-              <h3 className="text-sm font-medium tracking-[-0.02em]">Generated Content</h3>
-              <p className="text-sm text-neutral-600">
-                生成后可继续手动编辑，并支持仅改写当前选中的局部片段。
-              </p>
-            </div>
-
-            <div className="relative mt-5">
-              <textarea
-                ref={generatedSkillContentRef}
-                value={generatedSkillContent}
-                onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
-                onSelect={handleGeneratedContentSelection}
-                onKeyUp={handleGeneratedContentSelection}
-                onMouseUp={handleGeneratedContentSelection}
-                placeholder="合并结果会出现在这里。"
-                rows={18}
-                className="app-scrollbar min-h-80 w-full resize-y border border-black px-3 py-2 pr-14 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-              />
-              <SelectionRewriteDialog
-                selection={skillContentSelection}
-                isOpen={isSelectionRewriteDialogOpen}
-                instruction={selectionRewriteInstruction}
-                replacementPreview={selectionRewritePreview}
-                error={selectionRewriteError}
-                isSubmitting={isRewritingSelection}
-                title="Selected Fragment Rewrite"
-                description="基于当前选区和源 skills 上下文生成优化预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
-                placeholder="例如：保留原意，但把重复步骤合并成更清晰的说明。"
-                submitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
-                confirmLabel="确认替换"
-                triggerLabel="打开选区改写弹窗"
-                onInstructionChange={handleSelectionRewriteInstructionChange}
-                onReplacementPreviewChange={handleSelectionRewritePreviewChange}
-                onOpen={handleOpenSelectionRewriteDialog}
-                onClose={handleCloseSelectionRewriteDialog}
-                onSubmit={() => {
-                  void handleRewriteSelection()
-                }}
-                onConfirmReplace={handleApplyRewritePreview}
-              />
-            </div>
+            <SkillContentEditor
+              title="Generated Content"
+              description="生成后可继续手动编辑，并支持仅改写当前选中的局部片段。"
+              value={generatedSkillContent}
+              placeholder="合并结果会出现在这里。"
+              textareaRef={generatedSkillContentRef}
+              selection={skillContentSelection}
+              isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
+              selectionRewriteInstruction={selectionRewriteInstruction}
+              selectionRewritePreview={selectionRewritePreview}
+              selectionRewriteError={selectionRewriteError}
+              isRewritingSelection={isRewritingSelection}
+              selectionRewriteTitle="Selected Fragment Rewrite"
+              selectionRewriteDescription="基于当前选区和源 skills 上下文生成优化预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
+              selectionRewritePlaceholder="例如：保留原意，但把重复步骤合并成更清晰的说明。"
+              selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
+              selectionRewriteConfirmLabel="确认替换"
+              selectionRewriteTriggerLabel="打开选区改写弹窗"
+              onChange={handleGeneratedSkillContentChange}
+              onSelectionChange={handleGeneratedContentSelection}
+              onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
+              onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
+              onOpenSelectionRewriteDialog={handleOpenSelectionRewriteDialog}
+              onCloseSelectionRewriteDialog={handleCloseSelectionRewriteDialog}
+              onRewriteSelection={() => {
+                void handleRewriteSelection()
+              }}
+              onApplyRewritePreview={handleApplyRewritePreview}
+            />
 
             <div className="mt-4 border border-black bg-neutral-50 p-4">
               <div className="flex flex-col gap-2">

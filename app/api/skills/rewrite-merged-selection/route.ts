@@ -78,8 +78,8 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少修改意见。' }, { status: 400 })
   }
 
-  if (selectedSkills.length < 2) {
-    return Response.json({ error: '至少需要选择两个 skill。' }, { status: 400 })
+  if (selectedSkills.length === 0) {
+    return Response.json({ error: '至少需要提供一个 skill。' }, { status: 400 })
   }
 
   if (!fullContent.includes(selectedText)) {
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     const { text } = streamText({
       ...options,
       system: [
-        '你负责修改“合并后的 skill 草稿”中的一个局部片段。',
+        '你负责修改 skill 文档中的一个局部片段。',
         '你只能输出选中片段的替换结果，不要输出完整文档，不要解释，不要使用代码围栏。',
         '你必须同时参考完整草稿、源 skill 内容和用户修改意见。',
         '除被选中的片段本身外，不要试图改动其他部分。',
@@ -102,8 +102,8 @@ export async function POST(request: Request) {
         '不要编造仓库中不存在的命令、文件或工具。',
       ].join('\n'),
       prompt: [
-        `Merged skill name: ${name || 'unknown'}`,
-        `Merged skill description: ${description || 'unknown'}`,
+        `Skill name: ${name || 'unknown'}`,
+        `Skill description: ${description || 'unknown'}`,
         '',
         '## User Instruction',
         instruction,

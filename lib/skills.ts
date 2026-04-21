@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -404,6 +404,18 @@ async function readSkillSource(
   }
 }
 
+function toSkillSummary(source: SkillSource): SkillSummary {
+  return {
+    folderName: source.folderName,
+    location: source.location,
+    name: source.name,
+    description: source.description,
+    skillContent: source.skillContent,
+    filePaths: source.filePaths,
+    updatedAt: source.updatedAt,
+  }
+}
+
 function resolveSkillDirectory(context: SkillsContext, location: SkillLocation): string {
   return location === 'enabled' ? context.enabledSkillsDirectory : context.availableSkillsDirectory
 }
@@ -699,6 +711,45 @@ export async function buildSkillDownloadArchive(input: { skills: SkillReference[
   } catch {
     throw new Error('打包 skill 下载文件失败。')
   }
+}
+
+export async function updateSkillContent(input: {
+  location: SkillLocation
+  folderName: string
+  content: string
+}): Promise<SkillSummary> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const folderName = validateSkillDirectoryName(input.folderName)
+  const content = typeof input.content === 'string' ? input.content.trim() : ''
+
+  if (!content) {
+    throw new Error('skill 内容不能为空。')
+  }
+
+  const skillDirectory = join(resolveSkillDirectory(context.data, input.location), folderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${folderName}`)
+  }
+
+  await writeFile(skillFilePath, `${content}\n`, 'utf8')
+  const now = new Date()
+
+  await utimes(skillDirectory, now, now)
+
+  const updatedSkill = await readSkillSource(
+    resolveSkillDirectory(context.data, input.location),
+    input.location,
+    folderName,
+  )
+
+  return toSkillSummary(updatedSkill)
 }
 
 export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Promise<{

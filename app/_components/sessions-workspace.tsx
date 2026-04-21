@@ -7,7 +7,7 @@ import { usePathname, useRouter } from 'next/navigation'
 
 import type { SessionMessage, SessionSummary } from '@/lib/openclaw/sessions'
 
-import SelectionRewriteDialog from './selection-rewrite-dialog'
+import SkillContentEditor from './skill-content-editor'
 
 interface SessionsWorkspaceProps {
   sessions: SessionSummary[]
@@ -986,48 +986,35 @@ export default function SessionsWorkspace({
                   </section>
 
                   <section className="border border-black p-4 sm:p-5">
-                    <div className="flex flex-col gap-2">
-                      <h3 className="text-sm font-medium tracking-[-0.02em]">Generated Content</h3>
-                      <p className="text-sm text-neutral-600">
-                        生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。
-                      </p>
-                    </div>
-
-                    <div className="relative mt-5">
-                      <textarea
-                        ref={generatedSkillContentRef}
-                        value={generatedSkillContent}
-                        onChange={(event) => handleGeneratedSkillContentChange(event.target.value)}
-                        onSelect={handleGeneratedContentSelection}
-                        onKeyUp={handleGeneratedContentSelection}
-                        onMouseUp={handleGeneratedContentSelection}
-                        placeholder="生成结果会出现在这里。"
-                        rows={18}
-                        className="app-scrollbar min-h-80 w-full resize-y border border-black px-3 py-2 pr-14 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-                      />
-                      <SelectionRewriteDialog
-                        selection={skillContentSelection}
-                        isOpen={isSelectionRewriteDialogOpen}
-                        instruction={selectionRewriteInstruction}
-                        replacementPreview={selectionRewritePreview}
-                        error={selectionRewriteError}
-                        isSubmitting={isRewritingSelection}
-                        title="Selected Fragment Rewrite"
-                        description="基于当前选区和会话上下文生成优化预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
-                        placeholder="例如：保留原意，但改成更清晰的步骤式写法。"
-                        submitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
-                        confirmLabel="确认替换"
-                        triggerLabel="打开选区改写弹窗"
-                        onInstructionChange={handleSelectionRewriteInstructionChange}
-                        onReplacementPreviewChange={handleSelectionRewritePreviewChange}
-                        onOpen={handleOpenSelectionRewriteDialog}
-                        onClose={handleCloseSelectionRewriteDialog}
-                        onSubmit={() => {
-                          void handleRewriteSelection()
-                        }}
-                        onConfirmReplace={handleApplyRewritePreview}
-                      />
-                    </div>
+                    <SkillContentEditor
+                      title="Generated Content"
+                      description="生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。"
+                      value={generatedSkillContent}
+                      placeholder="生成结果会出现在这里。"
+                      textareaRef={generatedSkillContentRef}
+                      selection={skillContentSelection}
+                      isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
+                      selectionRewriteInstruction={selectionRewriteInstruction}
+                      selectionRewritePreview={selectionRewritePreview}
+                      selectionRewriteError={selectionRewriteError}
+                      isRewritingSelection={isRewritingSelection}
+                      selectionRewriteTitle="Selected Fragment Rewrite"
+                      selectionRewriteDescription="基于当前选区和会话上下文生成优化预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
+                      selectionRewritePlaceholder="例如：保留原意，但改成更清晰的步骤式写法。"
+                      selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
+                      selectionRewriteConfirmLabel="确认替换"
+                      selectionRewriteTriggerLabel="打开选区改写弹窗"
+                      onChange={handleGeneratedSkillContentChange}
+                      onSelectionChange={handleGeneratedContentSelection}
+                      onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
+                      onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
+                      onOpenSelectionRewriteDialog={handleOpenSelectionRewriteDialog}
+                      onCloseSelectionRewriteDialog={handleCloseSelectionRewriteDialog}
+                      onRewriteSelection={() => {
+                        void handleRewriteSelection()
+                      }}
+                      onApplyRewritePreview={handleApplyRewritePreview}
+                    />
 
                     <div className="mt-4 border border-black bg-neutral-50 p-4">
                       <div className="flex flex-col gap-2">
