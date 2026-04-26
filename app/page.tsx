@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import SessionsWorkspace from '@/app/_components/sessions-workspace'
 import { getSessionMessages, getSessionsOverview } from '@/lib/openclaw/sessions'
+import { getSkillsLibrary } from '@/lib/skills'
 
 interface HomePageProps {
   searchParams: Promise<{
@@ -34,6 +35,7 @@ export default async function Home({ searchParams }: HomePageProps) {
   await connection()
 
   const overviewPromise = getSessionsOverview()
+  const skillsLibraryPromise = getSkillsLibrary()
   const resolvedSearchParams = await searchParams
   const result = await overviewPromise
 
@@ -62,6 +64,9 @@ export default async function Home({ searchParams }: HomePageProps) {
   const messagesResult = selectedSessionId ? await getSessionMessages(selectedSessionId) : null
   const messages = messagesResult?.ok ? messagesResult.data.messages : []
   const messagesError = messagesResult && !messagesResult.ok ? messagesResult.error : undefined
+  const skillsLibraryResult = await skillsLibraryPromise
+  const availableSkills = skillsLibraryResult.ok ? skillsLibraryResult.data.availableSkills : []
+  const enabledSkills = skillsLibraryResult.ok ? skillsLibraryResult.data.enabledSkills : []
 
   return (
     <div className="min-h-screen bg-white px-4 py-4 text-black sm:px-6">
@@ -90,6 +95,8 @@ export default async function Home({ searchParams }: HomePageProps) {
           selectedSession={selectedSession}
           messages={messages}
           messagesError={messagesError}
+          availableSkills={availableSkills}
+          enabledSkills={enabledSkills}
         />
       </main>
     </div>

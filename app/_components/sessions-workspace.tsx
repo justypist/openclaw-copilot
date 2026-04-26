@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 
 import type { SessionMessage, SessionSummary } from '@/lib/openclaw/sessions'
+import type { SkillLocation, SkillSummary } from '@/lib/skills'
 
 import SkillContentEditor from './skill-content-editor'
 
@@ -13,16 +14,28 @@ interface SessionsWorkspaceProps {
   sessions: SessionSummary[]
   selectedSession: SessionSummary | null
   messages: SessionMessage[]
+  availableSkills: SkillSummary[]
+  enabledSkills: SkillSummary[]
   messagesError?: string
 }
+
+type SkillDraftMode = 'create' | 'update'
 
 interface SelectionState {
   sessionId: string
   selectedMessageKeys: string[]
   hasRequestedSkillCreation: boolean
+  skillDraftMode: SkillDraftMode
+  targetSkillKey: string
+  updateInstruction: string
   skillName: string
   skillDescription: string
   generatedSkillContent: string
+}
+
+interface TargetSkillReference {
+  folderName: string
+  location: SkillLocation
 }
 
 interface SkillContentSelection {
@@ -90,6 +103,10 @@ function getMessageKey(message: SessionMessage): string {
   return `${message.id}-${message.timestamp ?? 'unknown'}`
 }
 
+function getSkillKey(skill: TargetSkillReference): string {
+  return `${skill.location}:${skill.folderName}`
+}
+
 function isNormalMessage(message: SessionMessage): boolean {
   return NORMAL_MESSAGE_ROLES.has(message.role) && Boolean(message.text.trim())
 }
@@ -102,6 +119,8 @@ export default function SessionsWorkspace({
   sessions,
   selectedSession,
   messages,
+  availableSkills,
+  enabledSkills,
   messagesError,
 }: SessionsWorkspaceProps) {
   const router = useRouter()
@@ -115,6 +134,9 @@ export default function SessionsWorkspace({
     sessionId: activeSessionId,
     selectedMessageKeys: [],
     hasRequestedSkillCreation: false,
+    skillDraftMode: 'create',
+    targetSkillKey: '',
+    updateInstruction: '',
     skillName: '',
     skillDescription: '',
     generatedSkillContent: '',
@@ -126,6 +148,11 @@ export default function SessionsWorkspace({
     selectionState.sessionId === activeSessionId ? selectionState.skillDescription : ''
   const generatedSkillContent =
     selectionState.sessionId === activeSessionId ? selectionState.generatedSkillContent : ''
+  const skillDraftMode =
+    selectionState.sessionId === activeSessionId ? selectionState.skillDraftMode : 'create'
+  const targetSkillKey = selectionState.sessionId === activeSessionId ? selectionState.targetSkillKey : ''
+  const updateInstruction =
+    selectionState.sessionId === activeSessionId ? selectionState.updateInstruction : ''
   const [isGeneratingSkill, setIsGeneratingSkill] = useState(false)
   const [skillGenerationError, setSkillGenerationError] = useState('')
   const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
@@ -158,6 +185,18 @@ export default function SessionsWorkspace({
     () => (showAllMessages ? messages : selectableMessages),
     [messages, selectableMessages, showAllMessages],
   )
+  const existingSkills = useMemo(
+    () => [
+      ...enabledSkills.map((skill) => ({ ...skill, locationLabel: 'enabled' })),
+      ...availableSkills.map((skill) => ({ ...skill, locationLabel: 'available' })),
+    ],
+    [availableSkills, enabledSkills],
+  )
+  const selectedTargetSkill = useMemo(
+    () => existingSkills.find((skill) => getSkillKey(skill) === targetSkillKey) ?? null,
+    [existingSkills, targetSkillKey],
+  )
+  const canUpdateExistingSkill = existingSkills.length > 0
   const hiddenNonNormalCount = messages.length - selectableMessages.length
   const rawSelectedMessageKeys =
     selectionState.sessionId === activeSessionId
@@ -288,6 +327,11 @@ export default function SessionsWorkspace({
           nextSelectedMessageKeys.length > 0 &&
           currentState.sessionId === activeSessionId &&
           currentState.hasRequestedSkillCreation,
+        skillDraftMode:
+          currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'create',
+        targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+        updateInstruction:
+          currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
         skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
         skillDescription:
           currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
@@ -329,6 +373,9 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys: [],
       hasRequestedSkillCreation: false,
+      skillDraftMode: 'create',
+      targetSkillKey: '',
+      updateInstruction: '',
       skillName: '',
       skillDescription: '',
       generatedSkillContent: '',
@@ -345,10 +392,84 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys,
       hasRequestedSkillCreation: true,
+      skillDraftMode,
+      targetSkillKey,
+      updateInstruction,
       skillName: skillName || selectedSession?.title || '',
       skillDescription,
       generatedSkillContent,
     })
+  }
+
+  function handleSkillDraftModeChange(nextMode: SkillDraftMode) {
+    resetFinalizedSkillState()
+    clearSelectedFragment()
+
+    const nextTargetSkill =
+      nextMode === 'update' ? selectedTargetSkill ?? existingSkills[0] ?? null : null
+
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode: nextMode,
+      targetSkillKey: nextTargetSkill ? getSkillKey(nextTargetSkill) : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
+      skillName:
+        nextTargetSkill?.name ??
+        (currentState.sessionId === activeSessionId ? currentState.skillName : selectedSession?.title ?? ''),
+      skillDescription:
+        nextTargetSkill?.description ??
+        (currentState.sessionId === activeSessionId ? currentState.skillDescription : ''),
+      generatedSkillContent:
+        nextTargetSkill?.skillContent ??
+        (nextMode === 'create' ? '' : currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : ''),
+    }))
+  }
+
+  function handleTargetSkillChange(nextTargetSkillKey: string) {
+    resetFinalizedSkillState()
+    clearSelectedFragment()
+
+    const nextTargetSkill = existingSkills.find((skill) => getSkillKey(skill) === nextTargetSkillKey) ?? null
+
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode: 'update',
+      targetSkillKey: nextTargetSkill ? getSkillKey(nextTargetSkill) : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
+      skillName: nextTargetSkill?.name ?? '',
+      skillDescription: nextTargetSkill?.description ?? '',
+      generatedSkillContent: nextTargetSkill?.skillContent ?? '',
+    }))
+  }
+
+  function handleUpdateInstructionChange(nextValue: string) {
+    setSkillGenerationError('')
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode:
+        currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'update',
+      targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+      updateInstruction: nextValue,
+      skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
+      skillDescription:
+        currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
+      generatedSkillContent:
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+    }))
   }
 
   function handleBackToTimeline() {
@@ -356,6 +477,9 @@ export default function SessionsWorkspace({
       sessionId: activeSessionId,
       selectedMessageKeys,
       hasRequestedSkillCreation: false,
+      skillDraftMode,
+      targetSkillKey,
+      updateInstruction,
       skillName,
       skillDescription,
       generatedSkillContent,
@@ -372,6 +496,11 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
       hasRequestedSkillCreation:
         currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode:
+        currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'create',
+      targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
       skillName: nextValue,
       skillDescription:
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
@@ -388,6 +517,11 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
       hasRequestedSkillCreation:
         currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode:
+        currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'create',
+      targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
       skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
       skillDescription: nextValue,
       generatedSkillContent:
@@ -403,6 +537,11 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
       hasRequestedSkillCreation:
         currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode:
+        currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'create',
+      targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
       skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
       skillDescription:
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
@@ -449,6 +588,11 @@ export default function SessionsWorkspace({
 
   async function handleGenerateSkillContent() {
     if (!selectedSession || selectedMessages.length === 0) {
+      return
+    }
+
+    if (skillDraftMode === 'update') {
+      await handleGenerateUpdatedSkillContent()
       return
     }
 
@@ -508,6 +652,76 @@ export default function SessionsWorkspace({
       }
 
       setSkillGenerationError(error instanceof Error ? error.message : '生成失败。')
+    } finally {
+      if (requestId === skillGenerationRequestIdRef.current) {
+        setIsGeneratingSkill(false)
+      }
+    }
+  }
+
+  async function handleGenerateUpdatedSkillContent() {
+    if (!selectedSession || selectedMessages.length === 0) {
+      return
+    }
+
+    if (!selectedTargetSkill) {
+      setSkillGenerationError('请先选择要更新的 skill。')
+      return
+    }
+
+    const trimmedInstruction = updateInstruction.trim()
+
+    if (!trimmedInstruction) {
+      setSkillGenerationError('请先填写如何更新这个 skill。')
+      return
+    }
+
+    setIsGeneratingSkill(true)
+    setSkillGenerationError('')
+    setSelectionRewriteError('')
+    resetFinalizedSkillState()
+    const requestId = skillGenerationRequestIdRef.current + 1
+    skillGenerationRequestIdRef.current = requestId
+
+    try {
+      const response = await fetch('/api/skills/generate-update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          targetSkill: {
+            folderName: selectedTargetSkill.folderName,
+            location: selectedTargetSkill.location,
+          },
+          instruction: trimmedInstruction,
+          sessionTitle: selectedSession.title,
+          sessionKey: selectedSession.sessionKey,
+          selectedMessages,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        content?: string
+        error?: string
+      }
+
+      if (requestId !== skillGenerationRequestIdRef.current) {
+        return
+      }
+
+      if (!response.ok || !result.content) {
+        throw new Error(result.error || '生成更新草稿失败。')
+      }
+
+      handleGeneratedSkillContentChange(result.content)
+      clearSelectedFragment()
+    } catch (error) {
+      if (requestId !== skillGenerationRequestIdRef.current) {
+        return
+      }
+
+      setSkillGenerationError(error instanceof Error ? error.message : '生成更新草稿失败。')
     } finally {
       if (requestId === skillGenerationRequestIdRef.current) {
         setIsGeneratingSkill(false)
@@ -741,6 +955,58 @@ export default function SessionsWorkspace({
     }
   }
 
+  async function handleSaveExistingSkillContent() {
+    if (!selectedTargetSkill) {
+      setSkillSaveError('请先选择要更新的 skill。')
+      return
+    }
+
+    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+
+    if (!trimmedGeneratedSkillContent) {
+      setSkillSaveError('请先生成或填写完整 skill 内容。')
+      return
+    }
+
+    setIsSavingSkill(true)
+    setSkillSaveError('')
+    setSavedSkillDirectory('')
+
+    try {
+      const response = await fetch('/api/skills/update', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          folderName: selectedTargetSkill.folderName,
+          location: selectedTargetSkill.location,
+          content: trimmedGeneratedSkillContent,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        skill?: SkillSummary
+        error?: string
+      }
+
+      if (!response.ok || !result.skill) {
+        throw new Error(result.error || '保存失败。')
+      }
+
+      setSavedSkillDirectory(
+        `${result.skill.location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'}/${result.skill.folderName}`,
+      )
+      startTransition(() => {
+        router.refresh()
+      })
+    } catch (error) {
+      setSkillSaveError(error instanceof Error ? error.message : '保存失败。')
+    } finally {
+      setIsSavingSkill(false)
+    }
+  }
+
   async function handleSaveSkill() {
     if (!finalizedSkill) {
       return
@@ -750,6 +1016,11 @@ export default function SessionsWorkspace({
   }
 
   async function handleDirectSaveSkill() {
+    if (skillDraftMode === 'update') {
+      await handleSaveExistingSkillContent()
+      return
+    }
+
     const draft = buildDirectSaveDraft()
 
     if (!draft) {
@@ -894,7 +1165,7 @@ export default function SessionsWorkspace({
                       onClick={handleCreateSkill}
                       className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
                     >
-                      Create Skill
+                      Create / Update Skill
                     </button>
                   ) : null}
                 </div>
@@ -902,7 +1173,7 @@ export default function SessionsWorkspace({
 
               {hasRequestedSkillCreation && selectedCount > 0 ? (
                 <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-neutral-50 p-2 text-xs text-neutral-600">
-                  <span>基于已选 {selectedCount} 条记录创建 Skill</span>
+                  <span>基于已选 {selectedCount} 条记录创建或更新 Skill</span>
                   <button
                     type="button"
                     onClick={handleBackToTimeline}
@@ -933,64 +1204,152 @@ export default function SessionsWorkspace({
                 <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-5">
                   <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
                     <section className="border border-black p-4 sm:p-5">
-                    <div className="flex flex-col gap-2">
-                      <h3 className="text-sm font-medium tracking-[-0.02em]">Skill Editor</h3>
-                      <p className="text-sm text-neutral-600">
-                        已隐藏原始时间线。填写 `name` 和 `description` 后，可直接基于已选记录生成完整 SKILL 内容。
-                      </p>
-                    </div>
-
-                    <div className="mt-5 grid gap-4">
-                      <label className="grid gap-2 text-sm">
-                        <span className="font-medium">name</span>
-                        <input
-                          type="text"
-                          value={skillName}
-                          onChange={(event) => handleSkillNameChange(event.target.value)}
-                          placeholder="例如：extract-skill-from-chat"
-                          className="w-full border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-                        />
-                      </label>
-
-                      <label className="grid gap-2 text-sm">
-                        <span className="font-medium">description</span>
-                        <textarea
-                          value={skillDescription}
-                          onChange={(event) => handleSkillDescriptionChange(event.target.value)}
-                          placeholder="简要描述这个 skill 解决什么问题、适用于什么场景。"
-                          rows={6}
-                          className="app-scrollbar min-h-36 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
-                        />
-                      </label>
-                    </div>
-
-                    <div className="mt-5 flex flex-wrap items-center gap-2 border border-black bg-neutral-50 p-3 text-sm">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void handleGenerateSkillContent()
-                        }}
-                        disabled={isGeneratingSkill}
-                        className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                      >
-                        {isGeneratingSkill ? 'Generating...' : 'Generate Skill Content'}
-                      </button>
-                      <span className="text-neutral-500">将基于当前选中的 {selectedCount} 条时间线记录生成。</span>
-                    </div>
-
-                    {skillGenerationError ? (
-                      <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">
-                        {skillGenerationError}
+                      <div className="flex flex-col gap-2">
+                        <h3 className="text-sm font-medium tracking-[-0.02em]">Skill Editor</h3>
+                        <p className="text-sm text-neutral-600">
+                          已隐藏原始时间线。可以生成新 Skill，也可以选择一个已有 Skill，并用所选记录生成更新草稿。
+                        </p>
                       </div>
-                    ) : null}
-                  </section>
+
+                      <div className="mt-5 flex flex-wrap items-center gap-2 text-sm">
+                        <button
+                          type="button"
+                          aria-pressed={skillDraftMode === 'create'}
+                          onClick={() => handleSkillDraftModeChange('create')}
+                          className={[
+                            'border border-black px-3 py-1.5 transition-colors',
+                            skillDraftMode === 'create'
+                              ? 'bg-black text-white'
+                              : 'bg-white text-black hover:bg-neutral-100',
+                          ].join(' ')}
+                        >
+                          生成新 Skill
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={skillDraftMode === 'update'}
+                          onClick={() => handleSkillDraftModeChange('update')}
+                          disabled={!canUpdateExistingSkill}
+                          className={[
+                            'border border-black px-3 py-1.5 transition-colors disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400',
+                            skillDraftMode === 'update'
+                              ? 'bg-black text-white'
+                              : 'bg-white text-black hover:bg-neutral-100',
+                          ].join(' ')}
+                        >
+                          更新已有 Skill
+                        </button>
+                        {!canUpdateExistingSkill ? (
+                          <span className="text-neutral-500">当前没有可更新的已有 Skill。</span>
+                        ) : null}
+                      </div>
+
+                      {skillDraftMode === 'create' ? (
+                        <div className="mt-5 grid gap-4">
+                          <label className="grid gap-2 text-sm">
+                            <span className="font-medium">name</span>
+                            <input
+                              type="text"
+                              value={skillName}
+                              onChange={(event) => handleSkillNameChange(event.target.value)}
+                              placeholder="例如：extract-skill-from-chat"
+                              className="w-full border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                            />
+                          </label>
+
+                          <label className="grid gap-2 text-sm">
+                            <span className="font-medium">description</span>
+                            <textarea
+                              value={skillDescription}
+                              onChange={(event) => handleSkillDescriptionChange(event.target.value)}
+                              placeholder="简要描述这个 skill 解决什么问题、适用于什么场景。"
+                              rows={6}
+                              className="app-scrollbar min-h-36 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        <div className="mt-5 grid gap-4">
+                          <label className="grid gap-2 text-sm">
+                            <span className="font-medium">要更新的 Skill</span>
+                            <select
+                              value={targetSkillKey}
+                              onChange={(event) => handleTargetSkillChange(event.target.value)}
+                              className="w-full border border-black bg-white px-3 py-2 outline-none transition-colors focus:bg-neutral-50"
+                            >
+                              <option value="">请选择已有 Skill</option>
+                              {existingSkills.map((skill) => (
+                                <option key={getSkillKey(skill)} value={getSkillKey(skill)}>
+                                  {skill.name} ({skill.locationLabel}/{skill.folderName})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          {selectedTargetSkill ? (
+                            <div className="border border-black bg-neutral-50 p-3 text-sm text-neutral-600">
+                              <p className="font-medium text-black">{selectedTargetSkill.description}</p>
+                              <p className="mt-2 break-all font-mono text-[11px]">
+                                {selectedTargetSkill.location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'}/
+                                {selectedTargetSkill.folderName}
+                              </p>
+                              {selectedTargetSkill.filePaths.length > 1 ? (
+                                <p className="mt-2 text-xs">保存时只会更新该目录下的 `SKILL.md`。</p>
+                              ) : null}
+                            </div>
+                          ) : null}
+
+                          <label className="grid gap-2 text-sm">
+                            <span className="font-medium">更新指令</span>
+                            <textarea
+                              value={updateInstruction}
+                              onChange={(event) => handleUpdateInstructionChange(event.target.value)}
+                              placeholder="例如：把这次对话中确认的新命令和注意事项合并进去，保留原有结构，移除过时步骤。"
+                              rows={5}
+                              className="app-scrollbar min-h-32 w-full resize-y border border-black px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                            />
+                          </label>
+                        </div>
+                      )}
+
+                      <div className="mt-5 flex flex-wrap items-center gap-2 border border-black bg-neutral-50 p-3 text-sm">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleGenerateSkillContent()
+                          }}
+                          disabled={isGeneratingSkill || (skillDraftMode === 'update' && !canUpdateExistingSkill)}
+                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                        >
+                          {isGeneratingSkill
+                            ? 'Generating...'
+                            : skillDraftMode === 'update'
+                              ? 'Generate Update Draft'
+                              : 'Generate Skill Content'}
+                        </button>
+                        <span className="text-neutral-500">
+                          将基于当前选中的 {selectedCount} 条时间线记录
+                          {skillDraftMode === 'update' ? '更新所选 Skill。' : '生成新 Skill。'}
+                        </span>
+                      </div>
+
+                      {skillGenerationError ? (
+                        <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">
+                          {skillGenerationError}
+                        </div>
+                      ) : null}
+                    </section>
 
                   <section className="border border-black p-4 sm:p-5">
                     <SkillContentEditor
-                      title="Generated Content"
-                      description="生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。"
+                      title={skillDraftMode === 'update' ? 'Updated Skill Content' : 'Generated Content'}
+                      description={
+                        skillDraftMode === 'update'
+                          ? '这里是所选 Skill 的 SKILL.md 草稿。生成更新后可继续手动编辑，再写回原 Skill。'
+                          : '生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。'
+                      }
                       value={generatedSkillContent}
-                      placeholder="生成结果会出现在这里。"
+                      placeholder={skillDraftMode === 'update' ? '选择已有 Skill 后会显示当前 SKILL.md。' : '生成结果会出现在这里。'}
                       textareaRef={generatedSkillContentRef}
                       selection={skillContentSelection}
                       isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
@@ -1016,111 +1375,162 @@ export default function SessionsWorkspace({
                       onApplyRewritePreview={handleApplyRewritePreview}
                     />
 
-                    <div className="mt-4 border border-black bg-neutral-50 p-4">
-                      <div className="flex flex-col gap-2">
-                        <h4 className="text-sm font-medium">Finalize & Save</h4>
-                        <p className="text-sm text-neutral-600">
-                          修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
-                        </p>
-                      </div>
+                    {skillDraftMode === 'update' ? (
+                      <div className="mt-4 border border-black bg-neutral-50 p-4">
+                        <div className="flex flex-col gap-2">
+                          <h4 className="text-sm font-medium">Save Existing Skill</h4>
+                          <p className="text-sm text-neutral-600">
+                            修改满意后，可把当前内容写回所选 Skill 的 `SKILL.md`。
+                          </p>
+                        </div>
 
-                      <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleFinalizeSkill()
-                          }}
-                          disabled={isFinalizingSkill}
-                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                        >
-                          {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleDirectSaveSkill()
-                          }}
-                          disabled={isSavingSkill}
-                          className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-                        >
-                          {isSavingSkill ? 'Saving...' : 'Direct Save as SKILL.md'}
-                        </button>
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          {savedSkillDirectory ? (
+                            <>
+                              <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                              <button
+                                type="button"
+                                onClick={handleFinishSkillCreation}
+                                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                              >
+                                完成并返回时间线
+                              </button>
+                              <Link
+                                href="/skills"
+                                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+                              >
+                                查看 Skills Library
+                              </Link>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleSaveExistingSkillContent()
+                                }}
+                                disabled={isSavingSkill || !selectedTargetSkill}
+                                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                              >
+                                {isSavingSkill ? 'Saving...' : 'Save to Existing Skill'}
+                              </button>
+                              <span className="text-sm text-neutral-500">只会覆盖所选目录下的 `SKILL.md`。</span>
+                            </>
+                          )}
+                        </div>
+
+                        {skillSaveError ? (
+                          <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                            {skillSaveError}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="mt-4 border border-black bg-neutral-50 p-4">
+                        <div className="flex flex-col gap-2">
+                          <h4 className="text-sm font-medium">Finalize & Save</h4>
+                          <p className="text-sm text-neutral-600">
+                            修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
+                          </p>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleFinalizeSkill()
+                            }}
+                            disabled={isFinalizingSkill}
+                            className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                          >
+                            {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleDirectSaveSkill()
+                            }}
+                            disabled={isSavingSkill}
+                            className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+                          >
+                            {isSavingSkill ? 'Saving...' : 'Direct Save as SKILL.md'}
+                          </button>
+
+                          {finalizedSkill ? (
+                            <span className="text-sm text-neutral-500">
+                              目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
+                            </span>
+                          ) : (
+                            <span className="text-sm text-neutral-500">可先定稿拆分，也可直接把当前内容保存为 `SKILL.md`。</span>
+                          )}
+                        </div>
+
+                        {skillFinalizeError ? (
+                          <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                            {skillFinalizeError}
+                          </div>
+                        ) : null}
+
+                        {skillSaveError ? (
+                          <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                            {skillSaveError}
+                          </div>
+                        ) : null}
 
                         {finalizedSkill ? (
-                          <span className="text-sm text-neutral-500">
-                            目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
-                          </span>
-                        ) : (
-                          <span className="text-sm text-neutral-500">可先定稿拆分，也可直接把当前内容保存为 `SKILL.md`。</span>
-                        )}
-                      </div>
-
-                      {skillFinalizeError ? (
-                        <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
-                          {skillFinalizeError}
-                        </div>
-                      ) : null}
-
-                      {skillSaveError ? (
-                        <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
-                          {skillSaveError}
-                        </div>
-                      ) : null}
-
-                      {finalizedSkill ? (
-                        <div className="mt-4 grid gap-4">
-                          {finalizedSkill.files.map((file) => (
-                            <div key={file.path} className="border border-black bg-white p-3">
-                              <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                                <span>{file.path}</span>
-                                <span>{file.content.length} chars</span>
+                          <div className="mt-4 grid gap-4">
+                            {finalizedSkill.files.map((file) => (
+                              <div key={file.path} className="border border-black bg-white p-3">
+                                <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
+                                  <span>{file.path}</span>
+                                  <span>{file.content.length} chars</span>
+                                </div>
+                                <pre className="app-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
+                                  {file.content}
+                                </pre>
                               </div>
-                              <pre className="app-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-                                {file.content}
-                              </pre>
+                            ))}
+
+                            <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
+                              {savedSkillDirectory ? (
+                                <>
+                                  <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                                  <button
+                                    type="button"
+                                    onClick={handleFinishSkillCreation}
+                                    className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                                  >
+                                    完成并返回时间线
+                                  </button>
+                                  <Link
+                                    href="/skills"
+                                    className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+                                  >
+                                    查看 Skills Library
+                                  </Link>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void handleSaveSkill()
+                                    }}
+                                    disabled={isSavingSkill}
+                                    className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                                  >
+                                    {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
+                                  </button>
+                                  <span className="text-sm text-neutral-500">
+                                    将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
+                                  </span>
+                                </>
+                              )}
                             </div>
-                          ))}
-
-                          <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
-                            {savedSkillDirectory ? (
-                              <>
-                                <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
-                                <button
-                                  type="button"
-                                  onClick={handleFinishSkillCreation}
-                                  className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
-                                >
-                                  完成并返回时间线
-                                </button>
-                                <Link
-                                  href="/skills"
-                                  className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
-                                >
-                                  查看 Skills Library
-                                </Link>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    void handleSaveSkill()
-                                  }}
-                                  disabled={isSavingSkill}
-                                  className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                                >
-                                  {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
-                                </button>
-                                <span className="text-sm text-neutral-500">
-                                  将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
-                                </span>
-                              </>
-                            )}
                           </div>
-
-                        </div>
-                      ) : null}
-                    </div>
+                        ) : null}
+                      </div>
+                    )}
                     </section>
                   </div>
                 </div>
