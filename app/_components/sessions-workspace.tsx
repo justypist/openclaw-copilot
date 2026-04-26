@@ -1037,8 +1037,8 @@ export default function SessionsWorkspace({
   }
 
   return (
-    <section className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-      <aside className="flex h-[42vh] min-h-0 flex-col overflow-hidden border border-black bg-white lg:h-[calc(100vh-7.5rem)]">
+    <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,2fr)_minmax(0,3fr)] gap-4 lg:grid-cols-[360px_minmax(0,1fr)] lg:grid-rows-1">
+      <aside className="flex h-full min-h-0 flex-col overflow-hidden border border-black bg-white">
         <div className="flex items-center justify-between gap-3 border-b border-black px-4 py-3">
           <h2 className="text-sm font-medium">Sessions</h2>
           <span className="text-xs text-neutral-500">{isPending ? 'Loading' : sessions.length}</span>
@@ -1107,7 +1107,7 @@ export default function SessionsWorkspace({
         </div>
       </aside>
 
-      <section className="flex h-[62vh] min-h-0 flex-col overflow-hidden border border-black bg-white lg:h-[calc(100vh-7.5rem)]">
+      <section className="flex h-full min-h-0 flex-col overflow-hidden border border-black bg-white">
         {!selectedSession ? (
           <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-10 text-center text-neutral-500">
             暂无会话，右侧消息区还没有内容。

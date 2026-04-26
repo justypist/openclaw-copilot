@@ -69,8 +69,8 @@ export default async function Home({ searchParams }: HomePageProps) {
   const enabledSkills = skillsLibraryResult.ok ? skillsLibraryResult.data.enabledSkills : []
 
   return (
-    <div className="min-h-screen bg-white px-4 py-4 text-black sm:px-6">
-      <main className="mx-auto flex w-full max-w-[1680px] flex-col gap-4">
+    <div className="h-dvh overflow-hidden bg-white px-4 py-4 text-black sm:px-6">
+      <main className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col gap-4">
         <section className="border border-black bg-white px-4 py-3 sm:px-5">
           <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-2">

@@ -38,5 +38,6 @@ body {
 }
 
 .app-scrollbar {
+  contain: paint;
   scrollbar-gutter: stable;
 }
