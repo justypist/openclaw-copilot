@@ -32,6 +32,7 @@ export interface SessionMessage {
   text: string
   timestamp?: number
   sourceRecordId?: string
+  deduplicationKey?: string
   toolName?: string
   toolCallId?: string
   isError?: boolean
@@ -100,6 +101,7 @@ interface SessionFileRecord {
 interface SessionContentPart {
   type?: string
   text?: string
+  textSignature?: string
   thinking?: string
   thinkingSignature?: string
   id?: string
@@ -378,22 +380,85 @@ function parseConversationMetadata(text: string): ConversationMetadata {
   }
 }
 
+function normalizeDeduplicationText(text: string): string {
+  return text.replace(/\r\n/g, '\n').trim()
+}
+
+function stripUntrustedMetadataBlocks(text: string): string {
+  return text
+    .replace(
+      /^(?:Conversation info|Sender) \(untrusted metadata\):\s*```json\s*[\s\S]*?\s*```\s*/,
+      '',
+    )
+    .replace(
+      /^(?:Conversation info|Sender) \(untrusted metadata\):\s*```json\s*[\s\S]*?\s*```\s*/,
+      '',
+    )
+}
+
+function normalizeUserTextForDeduplication(text: string): string {
+  return normalizeDeduplicationText(stripUntrustedMetadataBlocks(text))
+}
+
 function extractConversationChatId(text: string): string | undefined {
   return parseConversationMetadata(text).chatId
 }
 
 function getMessageDeduplicationKey(message: SessionMessage): string | undefined {
-  if (message.role !== 'user') {
+  if (message.deduplicationKey) {
+    return message.deduplicationKey
+  }
+
+  if (message.role === 'user') {
+    const normalizedText = normalizeUserTextForDeduplication(message.text)
+
+    if (normalizedText && message.timestamp !== undefined) {
+      return `user:${message.timestamp}:${normalizedText}`
+    }
+
+    const metadata = parseConversationMetadata(message.text)
+
+    if (!metadata.messageId) {
+      return undefined
+    }
+
+    return `user:${metadata.chatId ?? 'unknown-chat'}:${metadata.messageId}`
+  }
+
+  if (message.role === 'assistant') {
+    const normalizedText = normalizeDeduplicationText(message.text)
+
+    if (!normalizedText || message.timestamp === undefined) {
+      return undefined
+    }
+
+    return `assistant:${message.timestamp}:${normalizedText}`
+  }
+
+  if (message.role === 'thinking') {
+    const normalizedText = normalizeDeduplicationText(message.text)
+    const signature = message.details?.trim()
+
+    if (signature) {
+      return `thinking:${signature}`
+    }
+
+    if (normalizedText && message.timestamp !== undefined) {
+      return `thinking:${message.timestamp}:${normalizedText}`
+    }
+
     return undefined
   }
 
-  const metadata = parseConversationMetadata(message.text)
-
-  if (!metadata.messageId) {
-    return undefined
+  if (message.role === 'tool-call' && message.toolCallId) {
+    return `tool-call:${message.toolCallId}`
   }
 
-  return `user:${metadata.chatId ?? 'unknown-chat'}:${metadata.messageId}`
+  if (message.role === 'tool-result' && message.toolCallId) {
+    return `tool-result:${message.toolCallId}:${normalizeDeduplicationText(message.text)}`
+  }
+
+  return undefined
 }
 
 function deduplicateSessionMessages(messages: SessionMessage[]): SessionMessage[] {
@@ -745,6 +810,7 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
     ? record.message.content.filter(isSessionContentPart)
     : []
   let textParts: string[] = []
+  let textPartSignatures: string[] = []
   let textIndex = 0
   let thinkingIndex = 0
   let toolCallIndex = 0
@@ -755,6 +821,7 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
 
     if (!text) {
       textParts = []
+      textPartSignatures = []
       return
     }
 
@@ -765,8 +832,14 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
       text,
       timestamp,
       sourceRecordId,
+      deduplicationKey:
+        speaker === 'assistant'
+          ? textPartSignatures.join('\n') ||
+            (record.message?.responseId ? `${record.message.responseId}:text-${textIndex}` : undefined)
+          : undefined,
     })
     textParts = []
+    textPartSignatures = []
   }
 
   for (const part of content) {
@@ -775,6 +848,10 @@ function extractTimelineEntries(record: SessionFileRecord, messageCount: number)
 
       if (value) {
         textParts.push(value)
+
+        if (typeof part.textSignature === 'string' && part.textSignature.trim()) {
+          textPartSignatures.push(part.textSignature.trim())
+        }
       }
 
       continue
