@@ -610,6 +610,35 @@ export async function moveSkills(input: {
   }
 }
 
+export async function deleteSkill(input: {
+  location: SkillLocation
+  folderName: string
+}): Promise<{
+  deletedSkillFolderName: string
+  location: SkillLocation
+}> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const folderName = validateSkillDirectoryName(input.folderName)
+  const skillDirectory = join(resolveSkillDirectory(context.data, input.location), folderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${folderName}`)
+  }
+
+  await rm(skillDirectory, { recursive: true })
+
+  return {
+    deletedSkillFolderName: folderName,
+    location: input.location,
+  }
+}
+
 export async function getSkillSources(input: { skills: SkillReference[] }): Promise<SkillSource[]> {
   const context = await resolveSkillsContext()
 

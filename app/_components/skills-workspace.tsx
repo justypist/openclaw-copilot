@@ -57,8 +57,11 @@ interface SkillColumnProps {
   skills: SkillSummary[]
   selectedFolderNames: string[]
   disabled: boolean
+  confirmingDeleteSkillKey: string
+  deletingSkillKey: string
   onToggle: (folderName: string) => void
   onPreview: (skill: SkillSummary) => void
+  onDelete: (skill: SkillSummary) => void
 }
 
 interface SkillPreviewDialogProps {
@@ -500,8 +503,11 @@ function SkillColumn({
   skills,
   selectedFolderNames,
   disabled,
+  confirmingDeleteSkillKey,
+  deletingSkillKey,
   onToggle,
   onPreview,
+  onDelete,
 }: SkillColumnProps) {
   const selectedFolderNameSet = new Set(selectedFolderNames)
 
@@ -525,6 +531,9 @@ function SkillColumn({
           <div className="grid gap-3">
             {skills.map((skill) => {
               const isSelected = selectedFolderNameSet.has(skill.folderName)
+              const skillKey = getSkillSelectionKey(skill.location, skill.folderName)
+              const isConfirmingDelete = confirmingDeleteSkillKey === skillKey
+              const isDeletingSkill = deletingSkillKey === skillKey
 
               return (
                 <div
@@ -607,6 +616,23 @@ function SkillColumn({
                     >
                       预览
                     </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onDelete(skill)}
+                      disabled={disabled}
+                      className={[
+                        'shrink-0 border px-3 py-1.5 text-xs transition-colors',
+                        isConfirmingDelete
+                          ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
+                          : isSelected
+                            ? 'border-white text-white hover:bg-neutral-800'
+                            : 'border-black text-black hover:bg-neutral-200',
+                        disabled ? 'cursor-not-allowed opacity-60' : '',
+                      ].join(' ')}
+                    >
+                      {isDeletingSkill ? '删除中...' : isConfirmingDelete ? '确认删除？' : '删除'}
+                    </button>
                   </div>
                 </div>
               )
@@ -627,6 +653,10 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   const [selectedEnabledFolderNames, setSelectedEnabledFolderNames] = useState<string[]>([])
   const [moveError, setMoveError] = useState('')
   const [moveSummary, setMoveSummary] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteSummary, setDeleteSummary] = useState('')
+  const [confirmingDeleteSkillKey, setConfirmingDeleteSkillKey] = useState('')
+  const [deletingSkillKey, setDeletingSkillKey] = useState('')
   const [downloadError, setDownloadError] = useState('')
   const [isDownloadingSkills, setIsDownloadingSkills] = useState(false)
   const [hasRequestedMerge, setHasRequestedMerge] = useState(false)
@@ -674,6 +704,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     isRewritingSelection ||
     isFinalizingSkill ||
     isSavingSkill ||
+    Boolean(deletingSkillKey) ||
     isDownloadingSkills
 
   useLayoutEffect(() => {
@@ -770,6 +801,9 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     resetSelectedSkillsDependentMergeState()
     setMoveError('')
     setMoveSummary('')
+    setDeleteError('')
+    setDeleteSummary('')
+    setConfirmingDeleteSkillKey('')
     setDownloadError('')
 
     setter((currentFolderNames) =>
@@ -868,11 +902,77 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   }
 
   function handleOpenPreview(skill: SkillSummary) {
+    setConfirmingDeleteSkillKey('')
     setPreviewSkill(skill)
   }
 
   function handleClosePreview() {
     setPreviewSkill(null)
+  }
+
+  async function handleDeleteSkill(skill: SkillSummary) {
+    const skillKey = getSkillSelectionKey(skill.location, skill.folderName)
+
+    if (confirmingDeleteSkillKey !== skillKey) {
+      setConfirmingDeleteSkillKey(skillKey)
+      setDeleteError('')
+      setDeleteSummary('')
+      return
+    }
+
+    setDeletingSkillKey(skillKey)
+    setDeleteError('')
+    setDeleteSummary('')
+
+    try {
+      const response = await fetch('/api/skills/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          location: skill.location,
+          folderName: skill.folderName,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        deletedSkillFolderName?: string
+        location?: SkillLocation
+        error?: string
+      }
+
+      if (!response.ok || typeof result.deletedSkillFolderName !== 'string') {
+        throw new Error(result.error || '删除失败。')
+      }
+
+      if (skill.location === 'available') {
+        setSelectedAvailableFolderNames((folderNames) =>
+          folderNames.filter((folderName) => folderName !== skill.folderName),
+        )
+      } else {
+        setSelectedEnabledFolderNames((folderNames) =>
+          folderNames.filter((folderName) => folderName !== skill.folderName),
+        )
+      }
+
+      if (previewSkill && getSkillSelectionKey(previewSkill.location, previewSkill.folderName) === skillKey) {
+        setPreviewSkill(null)
+      }
+
+      resetMergeEditorState()
+      setHasRequestedMerge(false)
+      setConfirmingDeleteSkillKey('')
+      setDeleteSummary(`已删除 ${skill.location}:${result.deletedSkillFolderName}。`)
+
+      startTransition(() => {
+        router.refresh()
+      })
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : '删除失败。')
+    } finally {
+      setDeletingSkillKey('')
+    }
   }
 
   async function handleMoveSkills(from: SkillLocation) {
@@ -885,6 +985,9 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
     setMoveError('')
     setMoveSummary('')
+    setDeleteError('')
+    setDeleteSummary('')
+    setConfirmingDeleteSkillKey('')
 
     try {
       const response = await fetch('/api/skills/move', {
@@ -1349,8 +1452,10 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         </div>
 
         {moveError ? <p className="mt-3 text-sm text-red-600">{moveError}</p> : null}
+        {deleteError ? <p className="mt-3 text-sm text-red-600">{deleteError}</p> : null}
         {downloadError ? <p className="mt-3 text-sm text-red-600">{downloadError}</p> : null}
         {moveSummary ? <p className="mt-3 text-sm text-neutral-700">{moveSummary}</p> : null}
+        {deleteSummary ? <p className="mt-3 text-sm text-neutral-700">{deleteSummary}</p> : null}
       </section>
 
       {hasRequestedMerge ? (
@@ -1561,8 +1666,13 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             skills={availableSkills}
             selectedFolderNames={selectedAvailableFolderNames}
             disabled={interactionDisabled}
+            confirmingDeleteSkillKey={confirmingDeleteSkillKey}
+            deletingSkillKey={deletingSkillKey}
             onToggle={(folderName) => toggleSelectedFolderName('available', folderName)}
             onPreview={handleOpenPreview}
+            onDelete={(skill) => {
+              void handleDeleteSkill(skill)
+            }}
           />
 
           <SkillColumn
@@ -1571,8 +1681,13 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             skills={enabledSkills}
             selectedFolderNames={selectedEnabledFolderNames}
             disabled={interactionDisabled}
+            confirmingDeleteSkillKey={confirmingDeleteSkillKey}
+            deletingSkillKey={deletingSkillKey}
             onToggle={(folderName) => toggleSelectedFolderName('enabled', folderName)}
             onPreview={handleOpenPreview}
+            onDelete={(skill) => {
+              void handleDeleteSkill(skill)
+            }}
           />
         </section>
       )}
