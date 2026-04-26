@@ -994,8 +994,24 @@ export default function SessionsWorkspace({
         throw new Error(result.error || '保存失败。')
       }
 
+      const savedSkill = result.skill
+
+      setSelectionState((currentState) => ({
+        sessionId: activeSessionId,
+        selectedMessageKeys:
+          currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+        hasRequestedSkillCreation:
+          currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+        skillDraftMode: 'update',
+        targetSkillKey: getSkillKey(savedSkill),
+        updateInstruction:
+          currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
+        skillName: savedSkill.name,
+        skillDescription: savedSkill.description,
+        generatedSkillContent: savedSkill.skillContent,
+      }))
       setSavedSkillDirectory(
-        `${result.skill.location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'}/${result.skill.folderName}`,
+        `${savedSkill.location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'}/${savedSkill.folderName}`,
       )
       startTransition(() => {
         router.refresh()

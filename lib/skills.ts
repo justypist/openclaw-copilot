@@ -760,22 +760,46 @@ export async function updateSkillContent(input: {
     throw new Error('skill 内容不能为空。')
   }
 
-  const skillDirectory = join(resolveSkillDirectory(context.data, input.location), folderName)
+  const skillsDirectory = resolveSkillDirectory(context.data, input.location)
+  const skillDirectory = join(skillsDirectory, folderName)
   const skillFilePath = join(skillDirectory, 'SKILL.md')
 
   if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
     throw new Error(`skill 不存在：${folderName}`)
   }
 
-  await writeFile(skillFilePath, `${content}\n`, 'utf8')
-  const now = new Date()
+  const nextFolderName = validateSkillDirectoryName(slugifySkillName(parseSkillMetadata(content, folderName).name))
+  const nextSkillDirectory = join(skillsDirectory, nextFolderName)
 
-  await utimes(skillDirectory, now, now)
+  if (nextFolderName !== folderName && (await pathExists(nextSkillDirectory))) {
+    throw new Error(`目标目录已存在同名 skill：${nextFolderName}`)
+  }
+
+  const previousContent = await readFile(skillFilePath, 'utf8')
+
+  try {
+    await writeFile(skillFilePath, `${content}\n`, 'utf8')
+
+    if (nextFolderName !== folderName) {
+      await rename(skillDirectory, nextSkillDirectory)
+    }
+  } catch (error) {
+    if (await pathExists(skillFilePath)) {
+      await writeFile(skillFilePath, previousContent, 'utf8')
+    }
+
+    throw error
+  }
+
+  const now = new Date()
+  const updatedSkillDirectory = join(skillsDirectory, nextFolderName)
+
+  await utimes(updatedSkillDirectory, now, now)
 
   const updatedSkill = await readSkillSource(
-    resolveSkillDirectory(context.data, input.location),
+    skillsDirectory,
     input.location,
-    folderName,
+    nextFolderName,
   )
 
   return toSkillSummary(updatedSkill)

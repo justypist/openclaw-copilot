@@ -66,10 +66,11 @@ interface SkillColumnProps {
 
 interface SkillPreviewDialogProps {
   skill: SkillSummary
+  onSaved: (previousSkill: SkillSummary, nextSkill: SkillSummary) => void
   onClose: () => void
 }
 
-function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) {
+function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
   const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
@@ -348,6 +349,7 @@ function SkillPreviewDialog({ skill, onClose }: SkillPreviewDialogProps) {
         throw new Error(result.error || '保存失败。')
       }
 
+      onSaved(activeSkill, result.skill)
       setCurrentSkill(result.skill)
       setDraftContent(result.skill.skillContent)
       setIsEditing(false)
@@ -906,6 +908,21 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     setPreviewSkill(skill)
   }
 
+  function handlePreviewSkillSaved(previousSkill: SkillSummary, nextSkill: SkillSummary) {
+    const replaceFolderName = (folderNames: string[]) =>
+      folderNames.map((folderName) =>
+        folderName === previousSkill.folderName ? nextSkill.folderName : folderName,
+      )
+
+    if (previousSkill.location === 'available') {
+      setSelectedAvailableFolderNames(replaceFolderName)
+    } else {
+      setSelectedEnabledFolderNames(replaceFolderName)
+    }
+
+    setPreviewSkill(nextSkill)
+  }
+
   function handleClosePreview() {
     setPreviewSkill(null)
   }
@@ -1383,6 +1400,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         <SkillPreviewDialog
           key={`${previewSkill.location}:${previewSkill.folderName}:${previewSkill.updatedAt ?? 0}`}
           skill={previewSkill}
+          onSaved={handlePreviewSkillSaved}
           onClose={handleClosePreview}
         />
       ) : null}
