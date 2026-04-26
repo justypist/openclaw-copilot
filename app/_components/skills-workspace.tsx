@@ -506,7 +506,7 @@ function SkillColumn({
   const selectedFolderNameSet = new Set(selectedFolderNames)
 
   return (
-    <section className="flex min-h-0 flex-col overflow-hidden border border-black bg-white">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden border border-black bg-white">
       <div className="flex items-center justify-between gap-3 border-b border-black px-4 py-3">
         <div>
           <h2 className="text-sm font-medium">{title}</h2>
@@ -1275,7 +1275,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {previewSkill ? (
         <SkillPreviewDialog
           key={`${previewSkill.location}:${previewSkill.folderName}:${previewSkill.updatedAt ?? 0}`}
@@ -1284,7 +1284,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         />
       ) : null}
 
-      <section className="border border-black bg-white px-4 py-3 sm:px-5">
+      <section className="shrink-0 border border-black bg-white px-4 py-3 sm:px-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-base font-medium tracking-[-0.02em]">Skills Library</h1>
@@ -1354,7 +1354,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       </section>
 
       {hasRequestedMerge ? (
-        <div className="grid gap-4">
+        <div className="app-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <div className="grid gap-4">
           <section className="border border-black bg-white p-4 sm:p-5">
             <div className="flex flex-col gap-2">
               <h2 className="text-sm font-medium tracking-[-0.02em]">Merge Skill Editor</h2>
@@ -1550,9 +1551,10 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
               ) : null}
             </div>
           </section>
+          </div>
         </div>
       ) : (
-        <section className="grid gap-4 lg:grid-cols-2">
+        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 lg:grid-cols-2 lg:grid-rows-1">
           <SkillColumn
             title="Available Skills"
             location="available"

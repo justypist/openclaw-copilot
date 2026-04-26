@@ -25,8 +25,8 @@ export default async function SkillsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-white px-4 py-4 text-black sm:px-6">
-      <main className="mx-auto flex w-full max-w-[1680px] flex-col gap-4">
+    <div className="h-dvh overflow-hidden bg-white px-4 py-4 text-black sm:px-6">
+      <main className="mx-auto flex h-full min-h-0 w-full max-w-[1680px] flex-col gap-4">
         <SkillsWorkspace
           availableSkills={result.data.availableSkills}
           enabledSkills={result.data.enabledSkills}
