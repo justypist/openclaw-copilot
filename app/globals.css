@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #000000;
+  --background: #000000;
+  --foreground: #ededed;
+  --surface: #050505;
+  --surface-elevated: #0a0a0a;
+  --surface-muted: #171717;
+  --border: #2a2a2a;
+  --muted: #a1a1aa;
 }
 
 @theme inline {
@@ -20,7 +25,7 @@ body {
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #000000 #ffffff;
+  scrollbar-color: #3f3f46 #000000;
 }
 
 *::-webkit-scrollbar {
@@ -29,15 +34,134 @@ body {
 }
 
 *::-webkit-scrollbar-track {
-  background: #ffffff;
+  background: #000000;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #000000;
-  border: 2px solid #ffffff;
+  background: #3f3f46;
+  border: 2px solid #000000;
 }
 
 .app-scrollbar {
   contain: paint;
   scrollbar-gutter: stable;
+}
+
+.vercel-dark {
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at top left, rgb(255 255 255 / 0.08), transparent 32rem),
+    #000000;
+}
+
+.vercel-dark .bg-white {
+  background-color: var(--surface);
+}
+
+.vercel-dark .bg-neutral-50 {
+  background-color: var(--surface-elevated);
+}
+
+.vercel-dark .bg-neutral-100,
+.vercel-dark .bg-neutral-200,
+.vercel-dark .bg-neutral-300,
+.vercel-dark .bg-neutral-400 {
+  background-color: var(--surface-muted);
+}
+
+.vercel-dark .bg-black {
+  background-color: #111111;
+}
+
+.vercel-dark .text-black {
+  color: var(--foreground);
+}
+
+.vercel-dark .bg-black.text-white,
+.vercel-dark .border-white.text-white {
+  color: var(--foreground);
+}
+
+.vercel-dark .bg-black.text-white:disabled {
+  color: #71717a;
+}
+
+.vercel-dark .border-white.text-white {
+  border-color: #fafafa;
+}
+
+.vercel-dark .text-neutral-200,
+.vercel-dark .text-neutral-300,
+.vercel-dark .text-neutral-400,
+.vercel-dark .text-neutral-500 {
+  color: var(--muted);
+}
+
+.vercel-dark .text-neutral-100 {
+  color: var(--surface-muted);
+}
+
+.vercel-dark .text-neutral-600,
+.vercel-dark .text-neutral-700 {
+  color: #d4d4d8;
+}
+
+.vercel-dark .border-black,
+.vercel-dark .border-neutral-300 {
+  border-color: var(--border);
+}
+
+.vercel-dark .ring-black {
+  --tw-ring-color: #ffffff;
+}
+
+.vercel-dark .accent-black {
+  accent-color: #ffffff;
+}
+
+.vercel-dark input,
+.vercel-dark textarea,
+.vercel-dark select {
+  background-color: #000000;
+  color: var(--foreground);
+  caret-color: #ffffff;
+}
+
+.vercel-dark option {
+  background-color: #000000;
+  color: var(--foreground);
+}
+
+.vercel-dark input::placeholder,
+.vercel-dark textarea::placeholder {
+  color: #71717a;
+}
+
+.vercel-dark .hover\:bg-neutral-100:hover,
+.vercel-dark .hover\:bg-neutral-200:hover,
+.vercel-dark .focus\:bg-neutral-50:focus {
+  background-color: var(--surface-muted);
+}
+
+.vercel-dark .hover\:bg-neutral-800:hover {
+  background-color: #27272a;
+}
+
+.vercel-dark .disabled\:bg-neutral-100:disabled,
+.vercel-dark .disabled\:bg-neutral-300:disabled,
+.vercel-dark .disabled\:bg-neutral-400:disabled {
+  background-color: #27272a;
+}
+
+.vercel-dark .disabled\:text-neutral-400:disabled,
+.vercel-dark .disabled\:text-neutral-500:disabled {
+  color: #71717a;
+}
+
+.vercel-dark .disabled\:border-neutral-300:disabled {
+  border-color: #27272a;
+}
+
+.vercel-dark [class*="shadow-"] {
+  box-shadow: 0 0 0 1px var(--border), 0 24px 80px rgb(0 0 0 / 0.72);
 }

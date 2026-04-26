@@ -541,8 +541,10 @@ function SkillColumn({
                 <div
                   key={`${skill.location}:${skill.folderName}`}
                   className={[
-                    'grid gap-3 border border-black p-3 transition-colors',
-                    isSelected ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100',
+                    'grid gap-3 border p-3 transition-colors',
+                    isSelected
+                      ? 'border-white bg-white text-black'
+                      : 'border-black bg-white text-black hover:bg-neutral-100',
                     disabled ? 'opacity-60' : '',
                   ].join(' ')}
                 >

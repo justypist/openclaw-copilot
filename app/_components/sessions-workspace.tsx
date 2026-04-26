@@ -1079,7 +1079,7 @@ export default function SessionsWorkspace({
                     className={[
                       'w-full overflow-hidden border px-3 py-3 text-left transition-colors',
                       isSelected
-                        ? 'border-black bg-black text-white'
+                        ? 'border-white bg-white text-black'
                         : 'border-black bg-white text-black hover:bg-neutral-100',
                     ].join(' ')}
                   >
@@ -1233,10 +1233,10 @@ export default function SessionsWorkspace({
                           aria-pressed={skillDraftMode === 'create'}
                           onClick={() => handleSkillDraftModeChange('create')}
                           className={[
-                            'border border-black px-3 py-1.5 transition-colors',
+                            'border px-3 py-1.5 transition-colors',
                             skillDraftMode === 'create'
-                              ? 'bg-black text-white'
-                              : 'bg-white text-black hover:bg-neutral-100',
+                              ? 'border-white bg-white text-black'
+                              : 'border-black bg-white text-black hover:bg-neutral-100',
                           ].join(' ')}
                         >
                           生成新 Skill
@@ -1247,10 +1247,10 @@ export default function SessionsWorkspace({
                           onClick={() => handleSkillDraftModeChange('update')}
                           disabled={!canUpdateExistingSkill}
                           className={[
-                            'border border-black px-3 py-1.5 transition-colors disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400',
+                            'border px-3 py-1.5 transition-colors disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400',
                             skillDraftMode === 'update'
-                              ? 'bg-black text-white'
-                              : 'bg-white text-black hover:bg-neutral-100',
+                              ? 'border-white bg-white text-black'
+                              : 'border-black bg-white text-black hover:bg-neutral-100',
                           ].join(' ')}
                         >
                           更新已有 Skill
@@ -1605,8 +1605,10 @@ export default function SessionsWorkspace({
                               <span
                                 aria-hidden="true"
                                 className={[
-                                  'flex h-4 w-4 items-center justify-center border border-black text-[10px] leading-none',
-                                  isChecked ? 'bg-black text-white' : 'bg-white text-transparent',
+                                  'flex h-4 w-4 items-center justify-center border text-[10px] leading-none',
+                                  isChecked
+                                    ? 'border-white bg-white text-white'
+                                    : 'border-black bg-white text-transparent',
                                   !isSelectable ? 'bg-neutral-100 text-neutral-100' : '',
                                 ].join(' ')}
                               >
@@ -1627,7 +1629,7 @@ export default function SessionsWorkspace({
                                       ? 'border-black bg-neutral-100 text-black'
                                       : 'border-black bg-neutral-50 text-black'
                                     : isUser
-                                      ? 'border-black bg-black text-white'
+                                      ? 'border-black bg-neutral-50 text-black'
                                       : isThinking
                                         ? 'border-black bg-neutral-100 text-black'
                                         : 'border-black bg-white text-black',
@@ -1645,7 +1647,9 @@ export default function SessionsWorkspace({
                                 ].join(' ')}
                               >
                                 <div className="flex min-w-0 items-center gap-3">
-                                  <span>{getItemLabel(message)}</span>
+                                  <span className={isUser ? 'text-xs font-semibold' : undefined}>
+                                    {getItemLabel(message)}
+                                  </span>
                                   {message.toolName ? (
                                     <span className="truncate font-mono normal-case tracking-normal">
                                       {message.toolName}
@@ -1676,7 +1680,12 @@ export default function SessionsWorkspace({
                                   {message.text}
                                 </p>
                               ) : (
-                                <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-7">
+                                <p
+                                  className={[
+                                    'mt-3 whitespace-pre-wrap break-words leading-7',
+                                    isUser ? 'text-[15px] font-medium' : 'text-sm',
+                                  ].join(' ')}
+                                >
                                   {message.text}
                                 </p>
                               )}
