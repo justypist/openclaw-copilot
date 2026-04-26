@@ -1,5 +1,7 @@
+import { createReadStream } from 'node:fs'
 import { access, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createInterface } from 'node:readline'
 
 import { config } from '@/config'
 
@@ -134,6 +136,28 @@ interface SessionSegment {
   title: string
   messageCount: number
   messages: SessionMessage[]
+}
+
+interface SessionSummarySegment {
+  startedAt?: number
+  updatedAt?: number
+  title?: string
+  messageCount: number
+}
+
+interface SessionSummarySegmentState extends SessionSummarySegment {
+  hasEntries: boolean
+  countedRecordIds: Set<string>
+  seenMessageKeys: Set<string>
+}
+
+interface ParsedSessionSummaryFile {
+  startedAt?: number
+  identity: {
+    sessionKey?: string
+    channel?: string
+  }
+  segments: SessionSummarySegment[]
 }
 
 interface SessionFileDescriptor {
@@ -482,42 +506,36 @@ function deduplicateSessionMessages(messages: SessionMessage[]): SessionMessage[
   return deduplicatedMessages
 }
 
-function inferSessionIdentity(messages: SessionMessage[] | undefined): {
+function inferSessionIdentityFromUserText(text: string): {
   sessionKey?: string
   channel?: string
 } {
-  for (const message of messages ?? []) {
-    if (message.role !== 'user') {
-      continue
-    }
+  const chatId = extractConversationChatId(text)
 
-    const chatId = extractConversationChatId(message.text)
-
-    if (chatId) {
-      if (chatId.startsWith('telegram:')) {
-        return {
-          channel: 'telegram',
-          sessionKey: `agent:main:telegram:direct:${chatId.slice('telegram:'.length)}`,
-        }
-      }
-
-      if (chatId.toLowerCase().endsWith('@im.wechat')) {
-        return {
-          channel: 'openclaw-weixin',
-          sessionKey: `agent:main:openclaw-weixin:direct:${chatId.toLowerCase()}`,
-        }
-      }
-
+  if (chatId) {
+    if (chatId.startsWith('telegram:')) {
       return {
-        sessionKey: chatId,
+        channel: 'telegram',
+        sessionKey: `agent:main:telegram:direct:${chatId.slice('telegram:'.length)}`,
       }
     }
 
-    if (message.text.includes('openclaw-control-ui')) {
+    if (chatId.toLowerCase().endsWith('@im.wechat')) {
       return {
-        channel: 'webchat',
-        sessionKey: 'agent:main:main',
+        channel: 'openclaw-weixin',
+        sessionKey: `agent:main:openclaw-weixin:direct:${chatId.toLowerCase()}`,
       }
+    }
+
+    return {
+      sessionKey: chatId,
+    }
+  }
+
+  if (text.includes('openclaw-control-ui')) {
+    return {
+      channel: 'webchat',
+      sessionKey: 'agent:main:main',
     }
   }
 
@@ -624,6 +642,250 @@ function buildSessionSegments(
       messages: visibleMessages,
     }
   })
+}
+
+function createSessionSummarySegmentState(): SessionSummarySegmentState {
+  return {
+    messageCount: 0,
+    hasEntries: false,
+    countedRecordIds: new Set<string>(),
+    seenMessageKeys: new Set<string>(),
+  }
+}
+
+function deduplicateSessionSummaryEntries(
+  entries: SessionMessage[],
+  segment: SessionSummarySegmentState,
+): SessionMessage[] {
+  const deduplicatedEntries: SessionMessage[] = []
+
+  for (const entry of entries) {
+    const messageKey = getMessageDeduplicationKey(entry)
+
+    if (messageKey) {
+      if (segment.seenMessageKeys.has(messageKey)) {
+        continue
+      }
+
+      segment.seenMessageKeys.add(messageKey)
+    }
+
+    deduplicatedEntries.push(entry)
+  }
+
+  return deduplicatedEntries
+}
+
+function updateSessionSummarySegmentTimestamp(
+  segment: SessionSummarySegmentState,
+  timestamp: number | undefined,
+) {
+  if (timestamp === undefined) {
+    return
+  }
+
+  if (segment.startedAt === undefined) {
+    segment.startedAt = timestamp
+  }
+
+  segment.updatedAt = timestamp
+}
+
+function toSessionSummarySegment(segment: SessionSummarySegmentState): SessionSummarySegment {
+  return {
+    startedAt: segment.startedAt,
+    updatedAt: segment.updatedAt,
+    title: segment.title,
+    messageCount: segment.messageCount,
+  }
+}
+
+function hasMessageTimelineEntries(record: SessionFileRecord): boolean {
+  const role = record.message?.role
+
+  if (record.type !== 'message' || role === 'toolResult') {
+    return true
+  }
+
+  if (role !== 'user' && role !== 'assistant') {
+    return false
+  }
+
+  const content = Array.isArray(record.message?.content)
+    ? record.message.content.filter(isSessionContentPart)
+    : []
+
+  for (const part of content) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      if (part.text.trim()) {
+        return true
+      }
+
+      continue
+    }
+
+    return true
+  }
+
+  return false
+}
+
+function getRecordTimestamp(record: SessionFileRecord): number | undefined {
+  if (!record.timestamp) {
+    return undefined
+  }
+
+  const timestamp = Date.parse(record.timestamp)
+
+  if (Number.isNaN(timestamp)) {
+    return undefined
+  }
+
+  return timestamp
+}
+
+function parseSessionRecordLine(line: string): SessionFileRecord | undefined {
+  if (!line) {
+    return undefined
+  }
+
+  try {
+    const parsedRecord = JSON.parse(line) as unknown
+
+    if (!parsedRecord || typeof parsedRecord !== 'object' || Array.isArray(parsedRecord)) {
+      return undefined
+    }
+
+    return parsedRecord as SessionFileRecord
+  } catch {
+    return undefined
+  }
+}
+
+function applySessionSummaryRecord(
+  record: SessionFileRecord,
+  state: {
+    currentSegment: SessionSummarySegmentState
+    segments: SessionSummarySegmentState[]
+    hasSeenConversation: boolean
+    startedAt?: number
+    identity: {
+      sessionKey?: string
+      channel?: string
+    }
+  },
+) {
+  if (!state.startedAt && record.type === 'session') {
+    state.startedAt = getRecordTimestamp(record)
+  }
+
+  const role = record.message?.role
+  const text = role === 'user' || role === 'assistant' ? extractText(record.message?.content) : ''
+  const isResetMessage = role === 'user' && isSessionResetMessage(text)
+  const hasTimelineEntries = hasMessageTimelineEntries(record)
+
+  if (isResetMessage && state.hasSeenConversation && state.currentSegment.hasEntries) {
+    state.segments.push(state.currentSegment)
+    state.currentSegment = createSessionSummarySegmentState()
+    state.hasSeenConversation = false
+  }
+
+  const timelineEntries = hasTimelineEntries
+    ? deduplicateSessionSummaryEntries(
+        extractTimelineEntries(record, state.currentSegment.messageCount),
+        state.currentSegment,
+      )
+    : []
+
+  if (timelineEntries.length > 0) {
+    for (const entry of timelineEntries) {
+      updateSessionSummarySegmentTimestamp(state.currentSegment, entry.timestamp)
+    }
+
+    state.currentSegment.hasEntries = true
+  }
+
+  if (role !== 'user' && role !== 'assistant') {
+    return
+  }
+
+  if (role === 'user' && text && !state.identity.sessionKey) {
+    state.identity = inferSessionIdentityFromUserText(text)
+  }
+
+  if (!text || isResetMessage) {
+    return
+  }
+
+  for (const entry of timelineEntries) {
+    if ((entry.role !== 'user' && entry.role !== 'assistant') || !entry.text.trim()) {
+      continue
+    }
+
+    if (isResetTimelineEntry(entry)) {
+      continue
+    }
+
+    if (entry.role === 'user' && !state.currentSegment.title) {
+      state.currentSegment.title = buildTitleFromText(entry.text)
+    }
+
+    const recordId = entry.sourceRecordId ?? entry.id
+
+    if (state.currentSegment.countedRecordIds.has(recordId)) {
+      continue
+    }
+
+    state.currentSegment.countedRecordIds.add(recordId)
+    state.currentSegment.messageCount += 1
+  }
+
+  state.hasSeenConversation = true
+}
+
+async function parseSessionFileSummary(sessionFilePath: string): Promise<ParsedSessionSummaryFile> {
+  const state: {
+    currentSegment: SessionSummarySegmentState
+    segments: SessionSummarySegmentState[]
+    hasSeenConversation: boolean
+    startedAt?: number
+    identity: {
+      sessionKey?: string
+      channel?: string
+    }
+  } = {
+    currentSegment: createSessionSummarySegmentState(),
+    segments: [],
+    hasSeenConversation: false,
+    identity: {},
+  }
+
+  const lines = createInterface({
+    input: createReadStream(sessionFilePath, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  })
+
+  for await (const line of lines) {
+    const record = parseSessionRecordLine(line)
+
+    if (!record) {
+      continue
+    }
+
+    applySessionSummaryRecord(record, state)
+  }
+
+  if (state.currentSegment.hasEntries) {
+    state.segments.push(state.currentSegment)
+  }
+
+  const segments = state.segments.length > 0 ? state.segments : [createSessionSummarySegmentState()]
+
+  return {
+    startedAt: state.startedAt,
+    identity: state.identity,
+    segments: segments.map(toSessionSummarySegment),
+  }
 }
 
 function extractTextParts(content: SessionContentPart[] | undefined): string[] {
@@ -904,25 +1166,15 @@ function parseSessionContents(
     includeMessages?: boolean
   },
 ): ParsedSessionFile {
-  const lines = contents.split('\n').filter(Boolean)
-
   let startedAt: number | undefined
   let title: string | undefined
   let messageCount = 0
   const messages: SessionMessage[] | undefined = options?.includeMessages ? [] : undefined
 
-  for (const line of lines) {
-    let record: SessionFileRecord
+  for (const line of contents.split('\n')) {
+    const record = parseSessionRecordLine(line)
 
-    try {
-      const parsedRecord = JSON.parse(line) as unknown
-
-      if (!parsedRecord || typeof parsedRecord !== 'object' || Array.isArray(parsedRecord)) {
-        continue
-      }
-
-      record = parsedRecord as SessionFileRecord
-    } catch {
+    if (!record) {
       continue
     }
 
@@ -1095,18 +1347,19 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
           }
 
           const metadata = sessionMetadataById.get(descriptor.sourceSessionId)
-          const parsed = await parseSessionFile(join(sessionsDirectory, descriptor.fileName), {
-            includeMessages: true,
-          })
-          const inferredIdentity = inferSessionIdentity(parsed.messages)
+          const parsed = await parseSessionFileSummary(join(sessionsDirectory, descriptor.fileName))
+          const inferredIdentity = parsed.identity
           const sessionKey =
             metadata?.sessionKey ??
             inferredIdentity.sessionKey ??
             `session:${descriptor.sourceSessionId}`
 
-          return buildSessionSegments(descriptor.logicalSessionId, sessionKey, parsed.messages).map(
-            (segment) => ({
-            sessionId: segment.sessionId,
+          return parsed.segments.map((segment, segmentIndex, segments) => ({
+            sessionId: buildSegmentSessionId(
+              descriptor.logicalSessionId,
+              segmentIndex,
+              segments.length,
+            ),
             sessionKey,
             updatedAt: segment.updatedAt ?? metadata?.updatedAt ?? segment.startedAt ?? 0,
             startedAt: segment.startedAt ?? parsed.startedAt ?? metadata?.startedAt,
@@ -1114,9 +1367,15 @@ export async function getSessionsOverview(): Promise<SessionsOverviewResult> {
             model: metadata?.model,
             channel: metadata?.channel ?? inferredIdentity.channel,
             messageCount: segment.messageCount,
-            title: segment.title,
-            }),
-          )
+            title:
+              segment.title ??
+              buildSegmentFallbackTitle(
+                sessionKey,
+                descriptor.logicalSessionId,
+                segmentIndex,
+                segments.length,
+              ),
+          }))
         } catch {
           return []
         }
