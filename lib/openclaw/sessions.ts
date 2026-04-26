@@ -344,10 +344,77 @@ function resolveSessionFileName(sessionId: string): string {
   return `${sessionId}${JSONL_EXTENSION}`
 }
 
-function extractConversationChatId(text: string): string | undefined {
-  const match = text.match(/"chat_id"\s*:\s*"([^"]+)"/)
+interface ConversationMetadata {
+  chatId?: string
+  messageId?: string
+}
 
-  return match?.[1]
+function parseConversationMetadata(text: string): ConversationMetadata {
+  const match = text.match(
+    /Conversation info \(untrusted metadata\):\s*```json\s*([\s\S]*?)\s*```/,
+  )
+
+  if (!match) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(match[1] ?? '') as unknown
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+
+    const metadata = parsed as Record<string, unknown>
+    const chatId = typeof metadata.chat_id === 'string' ? metadata.chat_id : undefined
+    const messageId = typeof metadata.message_id === 'string' ? metadata.message_id : undefined
+
+    return {
+      chatId,
+      messageId,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function extractConversationChatId(text: string): string | undefined {
+  return parseConversationMetadata(text).chatId
+}
+
+function getMessageDeduplicationKey(message: SessionMessage): string | undefined {
+  if (message.role !== 'user') {
+    return undefined
+  }
+
+  const metadata = parseConversationMetadata(message.text)
+
+  if (!metadata.messageId) {
+    return undefined
+  }
+
+  return `user:${metadata.chatId ?? 'unknown-chat'}:${metadata.messageId}`
+}
+
+function deduplicateSessionMessages(messages: SessionMessage[]): SessionMessage[] {
+  const seenMessageKeys = new Set<string>()
+  const deduplicatedMessages: SessionMessage[] = []
+
+  for (const message of messages) {
+    const messageKey = getMessageDeduplicationKey(message)
+
+    if (messageKey) {
+      if (seenMessageKeys.has(messageKey)) {
+        continue
+      }
+
+      seenMessageKeys.add(messageKey)
+    }
+
+    deduplicatedMessages.push(message)
+  }
+
+  return deduplicatedMessages
 }
 
 function inferSessionIdentity(messages: SessionMessage[] | undefined): {
@@ -442,14 +509,15 @@ function buildSessionSegments(
   }
 
   return rawSegments.map((segmentMessages, segmentIndex, segments): SessionSegment => {
-    const visibleMessages = segmentMessages.filter((message) => !isResetTimelineEntry(message))
+    const deduplicatedMessages = deduplicateSessionMessages(segmentMessages)
+    const visibleMessages = deduplicatedMessages.filter((message) => !isResetTimelineEntry(message))
     let startedAt: number | undefined
     let updatedAt: number | undefined
     let title: string | undefined
     let messageCount = 0
     const countedRecordIds = new Set<string>()
 
-    for (const message of segmentMessages) {
+    for (const message of deduplicatedMessages) {
       if (startedAt === undefined && message.timestamp !== undefined) {
         startedAt = message.timestamp
       }
