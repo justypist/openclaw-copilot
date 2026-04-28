@@ -939,6 +939,83 @@ export async function updateSkillContent(input: {
   return toSkillSummary(updatedSkill)
 }
 
+export async function updateSkillFiles(input: {
+  location: SkillLocation
+  folderName: string
+  files: SkillFileDraft[]
+}): Promise<SkillFileSet> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const folderName = validateSkillDirectoryName(input.folderName)
+  const files = validateSkillFileDrafts(input.files)
+  const skillContent = files.find((file) => file.path === 'SKILL.md')?.content ?? ''
+  const skillsDirectory = resolveSkillDirectory(context.data, input.location)
+  const skillDirectory = join(skillsDirectory, folderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${folderName}`)
+  }
+
+  const nextFolderName = validateSkillDirectoryName(slugifySkillName(parseSkillMetadata(skillContent, folderName).name))
+  const nextSkillDirectory = join(skillsDirectory, nextFolderName)
+
+  if (nextFolderName !== folderName && (await pathExists(nextSkillDirectory))) {
+    throw new Error(`目标目录已存在同名 skill：${nextFolderName}`)
+  }
+
+  const transientDirectorySuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const stagingSkillDirectory = join(
+    skillsDirectory,
+    `.${nextFolderName}.staging-${transientDirectorySuffix}`,
+  )
+  const backupSkillDirectory = join(
+    skillsDirectory,
+    `.${folderName}.backup-${transientDirectorySuffix}`,
+  )
+
+  await mkdir(skillsDirectory, { recursive: true })
+  await mkdir(stagingSkillDirectory, { recursive: true })
+
+  await Promise.all(
+    files.map(async (file) => {
+      const targetPath = join(stagingSkillDirectory, file.path)
+
+      await mkdir(dirname(targetPath), { recursive: true })
+      await writeFile(targetPath, `${file.content.trim()}\n`, 'utf8')
+    }),
+  )
+
+  try {
+    await rename(skillDirectory, backupSkillDirectory)
+    await rename(stagingSkillDirectory, nextSkillDirectory)
+  } catch (error) {
+    if (await pathExists(stagingSkillDirectory)) {
+      await rm(stagingSkillDirectory, { recursive: true, force: true })
+    }
+
+    if (!(await pathExists(skillDirectory)) && (await pathExists(backupSkillDirectory))) {
+      await rename(backupSkillDirectory, skillDirectory)
+    }
+
+    throw error
+  }
+
+  if (await pathExists(backupSkillDirectory)) {
+    await rm(backupSkillDirectory, { recursive: true, force: true })
+  }
+
+  const now = new Date()
+
+  await utimes(nextSkillDirectory, now, now)
+
+  return readSkillFileSet(skillsDirectory, input.location, nextFolderName)
+}
+
 export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Promise<{
   root: string
   availableSkillsDirectory: string
