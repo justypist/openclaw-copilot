@@ -103,6 +103,42 @@ function serializeFileDrafts(files: SkillFileRecord[]): string {
     .join('\u0001')
 }
 
+function getSkillEditorDraftStorageKey(location: SkillLocation, folderName: string): string {
+  return `skill-editor-draft:${location}:${folderName}`
+}
+
+function getValidatedSkillFilePath(value: string, existingPaths: string[], currentPath?: string):
+  | {
+      ok: true
+      path: string
+    }
+  | {
+      ok: false
+      error: string
+    } {
+  const path = value.trim().replace(/\\/g, '/')
+
+  if (!path || path === '.' || path.startsWith('/')) {
+    return { ok: false, error: '请输入合法的相对文件路径。' }
+  }
+
+  if (path.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    return { ok: false, error: '文件路径不能包含空段、. 或 ..。' }
+  }
+
+  if (path !== currentPath && existingPaths.includes(path)) {
+    return { ok: false, error: `文件已存在：${path}` }
+  }
+
+  return { ok: true, path }
+}
+
+interface StoredSkillEditorDraft {
+  savedSignature: string
+  selectedFilePath: string
+  files: SkillFileRecord[]
+}
+
 function toEditableFileRecords(files: SkillFileDraft[]): SkillFileRecord[] {
   return sortSkillFiles(
     files.map((file) => ({
@@ -144,7 +180,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const [selectedFilePath, setSelectedFilePath] = useState('SKILL.md')
   const [isLoadingFiles, setIsLoadingFiles] = useState(false)
   const [fileLoadError, setFileLoadError] = useState('')
+  const [isAddingFile, setIsAddingFile] = useState(false)
   const [newFilePath, setNewFilePath] = useState('')
+  const [renamingFilePath, setRenamingFilePath] = useState('')
+  const [renameFilePath, setRenameFilePath] = useState('')
+  const [confirmingDeleteFilePath, setConfirmingDeleteFilePath] = useState('')
   const [fileDraftError, setFileDraftError] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(skill.skillContent)
@@ -180,6 +220,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const selectedFileContent = selectedDraftFile?.content ?? savedSelectedFileContent
   const isSelectedFileEditable = selectedDraftFile?.editable ?? true
   const hasUnsavedChanges = serializeFileDrafts(draftFiles) !== serializeFileDrafts(savedFiles)
+  const draftStorageKey = getSkillEditorDraftStorageKey(activeSkill.location, activeSkill.folderName)
 
   useEffect(() => {
     let isCurrent = true
@@ -219,16 +260,38 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         }
 
         const nextFiles = result.skill.files
+        const nextSavedSignature = serializeFileDrafts(nextFiles)
+        const storedDraftValue = window.localStorage.getItem(
+          getSkillEditorDraftStorageKey(result.skill.location, result.skill.folderName),
+        )
+        let storedDraft: StoredSkillEditorDraft | null = null
+
+        if (storedDraftValue) {
+          try {
+            storedDraft = JSON.parse(storedDraftValue) as StoredSkillEditorDraft
+          } catch {
+            window.localStorage.removeItem(getSkillEditorDraftStorageKey(result.skill.location, result.skill.folderName))
+          }
+        }
+        const restoredFiles =
+          storedDraft?.savedSignature === nextSavedSignature && Array.isArray(storedDraft.files)
+            ? storedDraft.files
+            : nextFiles
         const nextSelectedFilePath = nextFiles.some((file) => file.path === 'SKILL.md')
           ? 'SKILL.md'
           : nextFiles[0]?.path ?? 'SKILL.md'
-        const nextSkillContent = nextFiles.find((file) => file.path === 'SKILL.md')?.content ?? result.skill.skillContent
+        const restoredSelectedFilePath = restoredFiles.some((file) => file.path === storedDraft?.selectedFilePath)
+          ? storedDraft?.selectedFilePath ?? nextSelectedFilePath
+          : nextSelectedFilePath
+        const nextSkillContent = restoredFiles.find((file) => file.path === restoredSelectedFilePath)?.content ?? result.skill.skillContent
 
         setCurrentSkill(result.skill)
         setSavedFiles(nextFiles)
-        setDraftFiles(nextFiles)
-        setSelectedFilePath(nextSelectedFilePath)
+        setDraftFiles(restoredFiles)
+        setSelectedFilePath(restoredSelectedFilePath)
         setDraftContent(nextSkillContent)
+        setIsEditing(Boolean(storedDraft && storedDraft.savedSignature === nextSavedSignature))
+        setSkillSaveSummary(storedDraft && storedDraft.savedSignature === nextSavedSignature ? '已恢复上次未保存的本地草稿。' : '')
       } catch (error) {
         if (!isCurrent) {
           return
@@ -252,6 +315,42 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
       isCurrent = false
     }
   }, [skill])
+
+  useEffect(() => {
+    if (!isEditing || savedFiles.length === 0) {
+      return
+    }
+
+    if (!hasUnsavedChanges) {
+      window.localStorage.removeItem(draftStorageKey)
+      return
+    }
+
+    const draft: StoredSkillEditorDraft = {
+      savedSignature: serializeFileDrafts(savedFiles),
+      selectedFilePath,
+      files: draftFiles,
+    }
+
+    window.localStorage.setItem(draftStorageKey, JSON.stringify(draft))
+  }, [draftFiles, draftStorageKey, hasUnsavedChanges, isEditing, savedFiles, selectedFilePath])
+
+  useEffect(() => {
+    if (!isEditing || !hasUnsavedChanges) {
+      return
+    }
+
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [hasUnsavedChanges, isEditing])
 
   function clearSelectedFragment() {
     setSkillContentSelection(null)
@@ -281,7 +380,20 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
       return
     }
 
+    if (isEditing && hasUnsavedChanges && !window.confirm('存在未保存的 skill 修改，确认放弃并关闭吗？')) {
+      return
+    }
+
+    if (isEditing && hasUnsavedChanges) {
+      window.localStorage.removeItem(draftStorageKey)
+    }
+
     onClose()
+  }
+
+  function discardAllLocalDraftChanges() {
+    window.localStorage.removeItem(draftStorageKey)
+    handleResetFileDrafts()
   }
 
   function handleOpenSelectionRewriteDialog() {
@@ -396,6 +508,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     clearSelectedFragment()
   }
 
+  function handleSaveCurrentFileDraft() {
+    handleDraftContentChange(draftContent)
+    setSkillSaveSummary(`已保存 ${selectedFilePath} 到本次编辑草稿。`)
+  }
+
   function handleSelectFile(filePath: string) {
     const nextFile = draftFiles.find((file) => file.path === filePath) ?? savedFiles.find((file) => file.path === filePath)
 
@@ -404,37 +521,49 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setSkillSaveError('')
     setSkillSaveSummary('')
     setFileDraftError('')
+    setConfirmingDeleteFilePath('')
     clearSelectedFragment()
   }
 
-  function handleAddFile() {
-    const path = newFilePath.trim().replace(/\\/g, '/')
+  function handleStartAddFile() {
+    setIsAddingFile(true)
+    setNewFilePath('')
+    setFileDraftError('')
+    setConfirmingDeleteFilePath('')
+  }
 
-    if (!path || path === '.' || path.startsWith('/')) {
-      setFileDraftError('请输入合法的相对文件路径。')
+  function handleCancelAddFile() {
+    setIsAddingFile(false)
+    setNewFilePath('')
+  }
+
+  function handleCreateFileFromInput() {
+    const validation = getValidatedSkillFilePath(
+      newFilePath,
+      draftFiles.map((file) => file.path),
+    )
+
+    if (!newFilePath.trim()) {
+      handleCancelAddFile()
       return
     }
 
-    if (path.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
-      setFileDraftError('文件路径不能包含空段、. 或 ..。')
-      return
-    }
-
-    if (draftFiles.some((file) => file.path === path)) {
-      setFileDraftError(`文件已存在：${path}`)
+    if (!validation.ok) {
+      setFileDraftError(validation.error)
       return
     }
 
     const nextFile: SkillFileRecord = {
-      path,
+      path: validation.path,
       content: '',
       size: 0,
       editable: true,
     }
 
     setDraftFiles((currentFiles) => sortSkillFiles([...currentFiles, nextFile]))
-    setSelectedFilePath(path)
+    setSelectedFilePath(validation.path)
     setDraftContent('')
+    setIsAddingFile(false)
     setNewFilePath('')
     setFileDraftError('')
     setSkillSaveError('')
@@ -442,8 +571,79 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     clearSelectedFragment()
   }
 
-  function handleDeleteSelectedFile() {
-    const nextFiles = draftFiles.filter((file) => file.path !== selectedFilePath)
+  function handleStartRenameFile(filePath: string) {
+    setRenamingFilePath(filePath)
+    setRenameFilePath(filePath)
+    setIsAddingFile(false)
+    setConfirmingDeleteFilePath('')
+    setFileDraftError('')
+  }
+
+  function handleCancelRenameFile() {
+    setRenamingFilePath('')
+    setRenameFilePath('')
+  }
+
+  function handleRenameFileFromInput() {
+    if (!renamingFilePath) {
+      return
+    }
+
+    const validation = getValidatedSkillFilePath(
+      renameFilePath,
+      draftFiles.map((file) => file.path),
+      renamingFilePath,
+    )
+
+    if (!validation.ok) {
+      setFileDraftError(validation.error)
+      return
+    }
+
+    if (validation.path === renamingFilePath) {
+      handleCancelRenameFile()
+      return
+    }
+
+    setDraftFiles((currentFiles) =>
+      sortSkillFiles(
+        currentFiles.map((file) =>
+          file.path === renamingFilePath
+            ? {
+                ...file,
+                path: validation.path,
+              }
+            : file,
+        ),
+      ),
+    )
+
+    if (selectedFilePath === renamingFilePath) {
+      setSelectedFilePath(validation.path)
+    }
+
+    setRenamingFilePath('')
+    setRenameFilePath('')
+    setFileDraftError('')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleConfirmDeleteFile(filePath: string) {
+    const targetFile = draftFiles.find((file) => file.path === filePath)
+
+    if (!targetFile?.editable) {
+      return
+    }
+
+    if (confirmingDeleteFilePath !== filePath) {
+      setConfirmingDeleteFilePath(filePath)
+      setFileDraftError('')
+      return
+    }
+
+    const nextFiles = draftFiles.filter((file) => file.path !== filePath)
     const nextSelectedFilePath = nextFiles.some((file) => file.path === 'SKILL.md')
       ? 'SKILL.md'
       : nextFiles[0]?.path ?? 'SKILL.md'
@@ -452,6 +652,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setDraftFiles(nextFiles)
     setSelectedFilePath(nextSelectedFilePath)
     setDraftContent(nextSelectedFile?.content ?? '')
+    setConfirmingDeleteFilePath('')
     setFileDraftError('')
     setSkillSaveError('')
     setSkillSaveSummary('')
@@ -467,7 +668,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setDraftFiles(savedFiles)
     setSelectedFilePath(nextSelectedFilePath)
     setDraftContent(nextSelectedFile?.content ?? activeSkill.skillContent)
+    setIsAddingFile(false)
     setNewFilePath('')
+    setRenamingFilePath('')
+    setRenameFilePath('')
+    setConfirmingDeleteFilePath('')
     setFileDraftError('')
     setSkillSaveError('')
     setSkillSaveSummary('')
@@ -475,7 +680,14 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   }
 
   function handleCancelEditing() {
-    handleResetDraft()
+    if (hasUnsavedChanges && !window.confirm('存在未保存的 skill 修改，确认放弃并退出编辑吗？')) {
+      return
+    }
+
+    if (hasUnsavedChanges) {
+      discardAllLocalDraftChanges()
+    }
+
     setIsEditing(false)
   }
 
@@ -657,6 +869,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
       setSelectedFilePath(nextSelectedFilePath)
       setDraftContent(nextSelectedFile?.content ?? result.skill.skillContent)
       setIsEditing(false)
+      window.localStorage.removeItem(draftStorageKey)
       clearSelectedFragment()
       setSkillSaveSummary(`已保存 ${result.skill.location}:${result.skill.folderName}。`)
 
@@ -690,6 +903,28 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
           </div>
 
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {isEditing ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void handleSaveSkill()
+                }}
+                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                className="border border-black bg-black px-3 py-1.5 text-sm text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
+              >
+                {isSavingSkill ? 'Saving...' : '保存修改'}
+              </button>
+            ) : null}
+            {isEditing ? (
+              <button
+                type="button"
+                onClick={handleResetFileDrafts}
+                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                className="border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+              >
+                重置全部文件
+              </button>
+            ) : null}
             {isEditing ? (
               <button
                 type="button"
@@ -736,69 +971,128 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         ) : null}
 
         {isEditing ? (
-          <div className="mt-5 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <div className="border border-black bg-white p-3">
+          <div className="mt-5 grid min-h-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <div className="flex min-h-0 flex-col border border-black bg-white p-3">
               <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Files</div>
-              <div className="mt-3 grid gap-2">
-                {draftFiles.map((file) => {
-                  const isSelected = file.path === selectedFilePath
-                  const readOnlyReason = file.editable ? '' : getReadOnlyReasonLabel(file.readOnlyReason)
-
-                  return (
-                    <button
-                      key={file.path}
-                      type="button"
-                      onClick={() => handleSelectFile(file.path)}
-                      className={[
-                        'grid gap-1 border p-2 text-left text-xs transition-colors',
-                        isSelected ? 'border-black bg-black text-white' : 'border-black bg-white text-black hover:bg-neutral-100',
-                      ].join(' ')}
-                    >
-                      <span className="break-all font-mono">{file.path}</span>
-                      <span className={isSelected ? 'text-neutral-300' : 'text-neutral-500'}>
-                        {formatFileSize(file.size)} · {file.editable ? '可编辑' : readOnlyReason}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="mt-4 grid gap-2 border-t border-black pt-3 text-xs">
-                <label className="grid gap-1">
-                  <span className="font-medium">新增文件路径</span>
+              <div className="app-scrollbar mt-3 grid max-h-[min(62vh,720px)] gap-2 overflow-y-auto pr-1">
+                {isAddingFile ? (
                   <input
                     type="text"
                     value={newFilePath}
                     onChange={(event) => setNewFilePath(event.target.value)}
+                    onBlur={handleCreateFileFromInput}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        handleCreateFileFromInput()
+                      }
+
+                      if (event.key === 'Escape') {
+                        handleCancelAddFile()
+                      }
+                    }}
                     placeholder="references/example.md"
-                    className="border border-black px-2 py-1.5 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                    autoFocus
+                    className="min-h-[58px] border border-black bg-white p-2 font-mono text-xs outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
                   />
-                </label>
-                <div className="flex flex-wrap gap-2">
+                ) : (
                   <button
                     type="button"
-                    onClick={handleAddFile}
-                    className="border border-black bg-black px-2 py-1 text-white transition-colors hover:bg-neutral-800"
+                    onClick={handleStartAddFile}
+                    className="grid min-h-[58px] gap-1 border border-dashed border-black bg-white p-2 text-left text-xs transition-colors hover:bg-neutral-100"
                   >
-                    新增文件
+                    <span className="font-mono">+ 新增文件</span>
+                    <span className="text-neutral-500">输入路径后回车或失焦创建</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteSelectedFile}
-                    disabled={draftFiles.length === 0 || !selectedDraftFile?.editable}
-                    className="border border-black px-2 py-1 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-                  >
-                    删除当前文件
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResetFileDrafts}
-                    className="border border-black px-2 py-1 transition-colors hover:bg-neutral-100"
-                  >
-                    重置文件草稿
-                  </button>
-                </div>
-                {fileDraftError ? <div className="border border-black bg-neutral-50 px-2 py-1.5 text-black">{fileDraftError}</div> : null}
+                )}
+                {draftFiles.map((file) => {
+                  const isSelected = file.path === selectedFilePath
+                  const readOnlyReason = file.editable ? '' : getReadOnlyReasonLabel(file.readOnlyReason)
+                  const isConfirmingDelete = confirmingDeleteFilePath === file.path
+                  const isRenaming = renamingFilePath === file.path
+
+                  return (
+                    <div
+                      key={file.path}
+                      className={[
+                        'group flex items-stretch gap-2 border p-2 text-xs transition-colors',
+                        isSelected ? 'border-black bg-black text-white' : 'border-black bg-white text-black hover:bg-neutral-100',
+                      ].join(' ')}
+                    >
+                      {isRenaming ? (
+                        <input
+                          type="text"
+                          value={renameFilePath}
+                          onChange={(event) => setRenameFilePath(event.target.value)}
+                          onBlur={handleRenameFileFromInput}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              handleRenameFileFromInput()
+                            }
+
+                            if (event.key === 'Escape') {
+                              handleCancelRenameFile()
+                            }
+                          }}
+                          autoFocus
+                          className="min-w-0 flex-1 border border-black bg-white px-2 py-1.5 font-mono text-xs text-black outline-none transition-colors focus:bg-neutral-50"
+                        />
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectFile(file.path)}
+                            className="grid min-w-0 flex-1 gap-1 text-left"
+                          >
+                            <span className="break-all font-mono">{file.path}</span>
+                            <span className={isSelected ? 'text-neutral-300' : 'text-neutral-500'}>
+                              {formatFileSize(file.size)} · {file.editable ? '可编辑' : readOnlyReason}
+                            </span>
+                          </button>
+                          {file.editable ? (
+                            <div className="flex shrink-0 items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  handleStartRenameFile(file.path)
+                                }}
+                                className={[
+                                  'border px-2 py-1 transition-colors opacity-0 group-hover:opacity-100',
+                                  isSelected
+                                    ? 'border-white text-white hover:bg-neutral-800'
+                                    : 'border-black text-black hover:bg-neutral-200',
+                                ].join(' ')}
+                              >
+                                重命名
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  handleConfirmDeleteFile(file.path)
+                                }}
+                                className={[
+                                  'border px-2 py-1 transition-colors',
+                                  isConfirmingDelete
+                                    ? 'border-red-600 bg-red-600 text-white opacity-100 hover:bg-red-700'
+                                    : isSelected
+                                      ? 'border-white text-white opacity-0 hover:bg-neutral-800 group-hover:opacity-100'
+                                      : 'border-black text-black opacity-0 hover:bg-neutral-200 group-hover:opacity-100',
+                                ].join(' ')}
+                              >
+                                {isConfirmingDelete ? '确认删除？' : '删除'}
+                              </button>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
+              {fileDraftError ? <div className="mt-3 border border-black bg-neutral-50 px-2 py-1.5 text-xs text-black">{fileDraftError}</div> : null}
             </div>
 
             <div className="border border-black bg-neutral-50 p-4 sm:p-5">
@@ -836,13 +1130,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-white p-3 text-sm">
               <button
                 type="button"
-                onClick={() => {
-                  void handleSaveSkill()
-                }}
-                disabled={isSavingSkill || isRewritingSelection}
+                onClick={handleSaveCurrentFileDraft}
+                disabled={isSavingSkill || isRewritingSelection || !isSelectedFileEditable}
                 className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
               >
-                {isSavingSkill ? 'Saving...' : '保存修改'}
+                保存当前文件
               </button>
               <button
                 type="button"
@@ -851,14 +1143,6 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
                 className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
               >
                 重置当前文件
-              </button>
-              <button
-                type="button"
-                onClick={handleResetFileDrafts}
-                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
-                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-              >
-                重置全部文件
               </button>
               <span className="text-neutral-500">
                 {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
