@@ -280,6 +280,28 @@ export function buildSkillFileSetContextForAi(fileSet: SkillFileSet): string {
   return fileSetContext
 }
 
+export function buildSkillFileDraftsContextForAi(files: SkillFileDraft[], currentFilePath: string): string {
+  const lines = [`# Current Skill Draft Files`, `- currentFilePath: ${currentFilePath}`, `- fileCount: ${files.length}`]
+
+  for (const file of files) {
+    lines.push('')
+    lines.push(`## File: ${file.path}${file.path === currentFilePath ? ' (current)' : ''}`)
+    lines.push('```md')
+    lines.push(file.content)
+    lines.push('```')
+  }
+
+  const filesContext = lines.join('\n')
+
+  assertMaxLength(
+    filesContext,
+    MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH,
+    `当前 skill 草稿文件集内容过长，最多允许 ${MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH} 个字符。请减少文件内容后重试。`,
+  )
+
+  return filesContext
+}
+
 export function validateSkillContentForAi(value: string): string {
   assertMaxLength(
     value,
