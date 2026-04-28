@@ -109,6 +109,8 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const [selectedFilePath, setSelectedFilePath] = useState('SKILL.md')
   const [isLoadingFiles, setIsLoadingFiles] = useState(false)
   const [fileLoadError, setFileLoadError] = useState('')
+  const [newFilePath, setNewFilePath] = useState('')
+  const [fileDraftError, setFileDraftError] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(skill.skillContent)
   const [isSavingSkill, setIsSavingSkill] = useState(false)
@@ -289,6 +291,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     )
     setSkillSaveError('')
     setSkillSaveSummary('')
+    setFileDraftError('')
 
     if (
       skillContentSelection &&
@@ -352,6 +355,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     )
     setSkillSaveError('')
     setSkillSaveSummary('')
+    setFileDraftError('')
     clearSelectedFragment()
   }
 
@@ -360,6 +364,84 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
     setSelectedFilePath(filePath)
     setDraftContent(nextFile?.content ?? '')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    setFileDraftError('')
+    clearSelectedFragment()
+  }
+
+  function handleAddFile() {
+    const path = newFilePath.trim().replace(/\\/g, '/')
+
+    if (!path || path === '.' || path.startsWith('/')) {
+      setFileDraftError('请输入合法的相对文件路径。')
+      return
+    }
+
+    if (path.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+      setFileDraftError('文件路径不能包含空段、. 或 ..。')
+      return
+    }
+
+    if (draftFiles.some((file) => file.path === path)) {
+      setFileDraftError(`文件已存在：${path}`)
+      return
+    }
+
+    const nextFile: SkillFileRecord = {
+      path,
+      content: '',
+      size: 0,
+      editable: true,
+    }
+
+    setDraftFiles((currentFiles) => [...currentFiles, nextFile].sort((left, right) => {
+      if (left.path === 'SKILL.md') {
+        return -1
+      }
+
+      if (right.path === 'SKILL.md') {
+        return 1
+      }
+
+      return left.path.localeCompare(right.path)
+    }))
+    setSelectedFilePath(path)
+    setDraftContent('')
+    setNewFilePath('')
+    setFileDraftError('')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleDeleteSelectedFile() {
+    const nextFiles = draftFiles.filter((file) => file.path !== selectedFilePath)
+    const nextSelectedFilePath = nextFiles.some((file) => file.path === 'SKILL.md')
+      ? 'SKILL.md'
+      : nextFiles[0]?.path ?? 'SKILL.md'
+    const nextSelectedFile = nextFiles.find((file) => file.path === nextSelectedFilePath)
+
+    setDraftFiles(nextFiles)
+    setSelectedFilePath(nextSelectedFilePath)
+    setDraftContent(nextSelectedFile?.content ?? '')
+    setFileDraftError('')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleResetFileDrafts() {
+    const nextSelectedFilePath = savedFiles.some((file) => file.path === 'SKILL.md')
+      ? 'SKILL.md'
+      : savedFiles[0]?.path ?? 'SKILL.md'
+    const nextSelectedFile = savedFiles.find((file) => file.path === nextSelectedFilePath)
+
+    setDraftFiles(savedFiles)
+    setSelectedFilePath(nextSelectedFilePath)
+    setDraftContent(nextSelectedFile?.content ?? activeSkill.skillContent)
+    setNewFilePath('')
+    setFileDraftError('')
     setSkillSaveError('')
     setSkillSaveSummary('')
     clearSelectedFragment()
@@ -599,6 +681,43 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
                     </button>
                   )
                 })}
+              </div>
+              <div className="mt-4 grid gap-2 border-t border-black pt-3 text-xs">
+                <label className="grid gap-1">
+                  <span className="font-medium">新增文件路径</span>
+                  <input
+                    type="text"
+                    value={newFilePath}
+                    onChange={(event) => setNewFilePath(event.target.value)}
+                    placeholder="references/example.md"
+                    className="border border-black px-2 py-1.5 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+                  />
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAddFile}
+                    className="border border-black bg-black px-2 py-1 text-white transition-colors hover:bg-neutral-800"
+                  >
+                    新增文件
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelectedFile}
+                    disabled={draftFiles.length === 0}
+                    className="border border-black px-2 py-1 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+                  >
+                    删除当前文件
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetFileDrafts}
+                    className="border border-black px-2 py-1 transition-colors hover:bg-neutral-100"
+                  >
+                    重置文件草稿
+                  </button>
+                </div>
+                {fileDraftError ? <div className="border border-black bg-neutral-50 px-2 py-1.5 text-black">{fileDraftError}</div> : null}
               </div>
             </div>
 
