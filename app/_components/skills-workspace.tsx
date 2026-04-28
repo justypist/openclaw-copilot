@@ -1,11 +1,11 @@
 'use client'
 
-import { useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 
-import type { FinalizedSkillDraft, SkillFileDraft, SkillLocation, SkillSummary } from '@/lib/skills'
+import type { FinalizedSkillDraft, SkillFileDraft, SkillFileRecord, SkillLocation, SkillSummary } from '@/lib/skills'
 
 import SkillContentEditor from './skill-content-editor'
 
@@ -76,6 +76,10 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
   const pendingTextareaViewStateRef = useRef<TextareaViewState | null>(null)
   const [currentSkill, setCurrentSkill] = useState(skill)
+  const [savedFiles, setSavedFiles] = useState<SkillFileRecord[]>([])
+  const [selectedFilePath, setSelectedFilePath] = useState('SKILL.md')
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false)
+  const [fileLoadError, setFileLoadError] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(skill.skillContent)
   const [isSavingSkill, setIsSavingSkill] = useState(false)
@@ -104,7 +108,79 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   }, [draftContent])
 
   const activeSkill = currentSkill
-  const hasUnsavedChanges = draftContent !== activeSkill.skillContent
+  const selectedSavedFile = savedFiles.find((file) => file.path === selectedFilePath) ?? null
+  const activeSkillContent = savedFiles.find((file) => file.path === 'SKILL.md')?.content ?? activeSkill.skillContent
+  const hasUnsavedChanges = draftContent !== activeSkillContent
+
+  useEffect(() => {
+    let isCurrent = true
+
+    async function loadSkillFiles() {
+      await Promise.resolve()
+
+      if (!isCurrent) {
+        return
+      }
+
+      setIsLoadingFiles(true)
+      setFileLoadError('')
+
+      try {
+        const response = await fetch('/api/skills/files', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            folderName: skill.folderName,
+            location: skill.location,
+          }),
+        })
+        const result = (await response.json()) as {
+          skill?: SkillSummary & { files?: SkillFileRecord[] }
+          error?: string
+        }
+
+        if (!response.ok || !result.skill || !Array.isArray(result.skill.files)) {
+          throw new Error(result.error || '读取 skill 文件失败。')
+        }
+
+        if (!isCurrent) {
+          return
+        }
+
+        const nextFiles = result.skill.files
+        const nextSelectedFilePath = nextFiles.some((file) => file.path === 'SKILL.md')
+          ? 'SKILL.md'
+          : nextFiles[0]?.path ?? 'SKILL.md'
+        const nextSkillContent = nextFiles.find((file) => file.path === 'SKILL.md')?.content ?? result.skill.skillContent
+
+        setCurrentSkill(result.skill)
+        setSavedFiles(nextFiles)
+        setSelectedFilePath(nextSelectedFilePath)
+        setDraftContent(nextSkillContent)
+      } catch (error) {
+        if (!isCurrent) {
+          return
+        }
+
+        setFileLoadError(error instanceof Error ? error.message : '读取 skill 文件失败。')
+        setSavedFiles([])
+        setSelectedFilePath('SKILL.md')
+        setDraftContent(skill.skillContent)
+      } finally {
+        if (isCurrent) {
+          setIsLoadingFiles(false)
+        }
+      }
+    }
+
+    void loadSkillFiles()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [skill])
 
   function clearSelectedFragment() {
     setSkillContentSelection(null)
@@ -210,14 +286,14 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
   function handleStartEditing() {
     setIsEditing(true)
-    setDraftContent(activeSkill.skillContent)
+    setDraftContent(activeSkillContent)
     setSkillSaveError('')
     setSkillSaveSummary('')
     clearSelectedFragment()
   }
 
   function handleResetDraft() {
-    setDraftContent(activeSkill.skillContent)
+    setDraftContent(activeSkillContent)
     setSkillSaveError('')
     setSkillSaveSummary('')
     clearSelectedFragment()
@@ -420,7 +496,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
           <time>{formatTimestamp(activeSkill.updatedAt)}</time>
           <span>{activeSkill.filePaths.join(', ')}</span>
+          <span>当前文件：{selectedSavedFile?.path ?? selectedFilePath}</span>
         </div>
+
+        {isLoadingFiles ? <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">正在加载完整文件集...</div> : null}
+        {fileLoadError ? <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">{fileLoadError}</div> : null}
 
         {skillSaveError ? <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">{skillSaveError}</div> : null}
         {skillSaveSummary ? (
@@ -430,10 +510,10 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         {isEditing ? (
           <div className="mt-5 border border-black bg-neutral-50 p-4 sm:p-5">
             <SkillContentEditor
-              title="Edit SKILL.md"
+              title={`Edit ${selectedFilePath}`}
               description="支持直接手动编辑，也支持先在正文中选区，再让 AI 只改写该片段。"
               value={draftContent}
-              placeholder="SKILL.md 内容会显示在这里。"
+              placeholder={`${selectedFilePath} 内容会显示在这里。`}
               textareaRef={generatedSkillContentRef}
               selection={skillContentSelection}
               isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
@@ -486,11 +566,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         ) : (
           <div className="mt-5 border border-black bg-neutral-50 p-3">
             <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-              <span>SKILL.md</span>
-              <span>{activeSkill.skillContent.length} chars</span>
+              <span>{selectedFilePath}</span>
+              <span>{activeSkillContent.length} chars</span>
             </div>
             <pre className="app-scrollbar mt-3 max-h-[70vh] overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-              {activeSkill.skillContent || 'SKILL.md 为空。'}
+              {activeSkillContent || `${selectedFilePath} 为空。`}
             </pre>
           </div>
         )}
