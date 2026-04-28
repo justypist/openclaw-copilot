@@ -546,13 +546,27 @@ function resolveSkillDirectory(context: SkillsContext, location: SkillLocation):
 export function validateFinalizedSkillDraft(input: FinalizedSkillDraft): FinalizedSkillDraft {
   const folderName = slugifySkillName(normalizeText(input.folderName))
 
-  if (!Array.isArray(input.files) || input.files.length === 0) {
+  return {
+    folderName,
+    files: validateSkillFileDrafts(input.files),
+  }
+}
+
+export function validateSkillFileDrafts(input: SkillFileDraft[]): SkillFileDraft[] {
+  if (!Array.isArray(input) || input.length === 0) {
     throw new Error('至少需要一个 skill 文件。')
   }
 
-  const files = input.files.map((file) => {
+  const seenPaths = new Set<string>()
+  const files = input.map((file) => {
     const path = validateSkillFilePath(file.path)
     const content = typeof file.content === 'string' ? file.content.trim() : ''
+
+    if (seenPaths.has(path)) {
+      throw new Error(`skill 文件路径重复：${path}`)
+    }
+
+    seenPaths.add(path)
 
     if (!content) {
       throw new Error(`skill 文件内容为空：${path}`)
@@ -570,10 +584,7 @@ export function validateFinalizedSkillDraft(input: FinalizedSkillDraft): Finaliz
     throw new Error('最终结果必须包含 SKILL.md。')
   }
 
-  return {
-    folderName,
-    files,
-  }
+  return files
 }
 
 export async function resolveSkillsContext(): Promise<
