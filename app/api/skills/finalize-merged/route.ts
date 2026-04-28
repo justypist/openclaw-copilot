@@ -3,12 +3,15 @@ import { z } from 'zod'
 
 import { options } from '@/lib/ai'
 import {
+  buildSkillFileDraftsContextForAi,
   buildSkillSourcesContextForAi,
   getSkillSources,
   slugifySkillName,
   SkillsInputError,
   validateSkillContentForAi,
   validateFinalizedSkillDraft,
+  validateSkillFileDrafts,
+  type SkillFileDraft,
   type SkillLocation,
 } from '@/lib/skills'
 
@@ -16,6 +19,8 @@ interface FinalizeMergedSkillRequestBody {
   name?: unknown
   description?: unknown
   fullContent?: unknown
+  currentFilePath?: unknown
+  files?: unknown
   selectedSkills?: unknown
 }
 
@@ -38,6 +43,21 @@ const finalizedSkillSchema = z.object({
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function parseSkillFileDrafts(value: unknown): SkillFileDraft[] | null {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  return value.map((item) => {
+    const candidate = item as Partial<Record<keyof SkillFileDraft, unknown>>
+
+    return {
+      path: typeof candidate.path === 'string' ? candidate.path : '',
+      content: typeof candidate.content === 'string' ? candidate.content : '',
+    }
+  })
 }
 
 function isSkillLocation(value: unknown): value is SkillLocation {
@@ -75,6 +95,8 @@ export async function POST(request: Request) {
   const name = normalizeText(body.name)
   const description = normalizeText(body.description)
   const fullContent = typeof body.fullContent === 'string' ? body.fullContent : ''
+  const currentFilePath = normalizeText(body.currentFilePath) || 'SKILL.md'
+  const files = parseSkillFileDrafts(body.files)
   const selectedSkills = parseSkillReferences(body.selectedSkills)
 
   if (!name) {
@@ -85,7 +107,7 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少 skill description。' }, { status: 400 })
   }
 
-  if (!fullContent.trim()) {
+  if (!files && !fullContent.trim()) {
     return Response.json({ error: '缺少完整 skill 内容。' }, { status: 400 })
   }
 
@@ -96,7 +118,9 @@ export async function POST(request: Request) {
   const suggestedFolderName = slugifySkillName(name)
 
   try {
-    const validatedFullContent = validateSkillContentForAi(fullContent.trim())
+    const draftContext = files
+      ? buildSkillFileDraftsContextForAi(validateSkillFileDrafts(files), currentFilePath)
+      : validateSkillContentForAi(fullContent.trim())
     const sources = await getSkillSources({ skills: selectedSkills })
     const sourcesContext = buildSkillSourcesContextForAi(sources)
 
@@ -108,7 +132,7 @@ export async function POST(request: Request) {
         schema: finalizedSkillSchema,
       }),
       system: [
-        '你负责把一份已经过人工调整的合并 skill 草稿整理成最终可保存的技能目录。',
+        '你负责把已经过人工调整的合并 skill 草稿整理成最终可保存的技能目录。',
         '你必须返回符合 schema 的结构化对象，不要输出解释。',
         '最终结果必须包含 SKILL.md，且其中必须保留合法 YAML frontmatter，至少包含 name 和 description。',
         '如果内容较短且自洽，只返回一个文件：SKILL.md。',
@@ -122,8 +146,8 @@ export async function POST(request: Request) {
         `Merged skill description: ${description}`,
         `Suggested folder name: ${suggestedFolderName}`,
         '',
-        '## Current Merged Skill Draft',
-        validatedFullContent,
+        files ? '## Current Merged Skill Draft Files' : '## Current Merged Skill Draft',
+        draftContext,
         '',
         '## Source Skills',
         sourcesContext,

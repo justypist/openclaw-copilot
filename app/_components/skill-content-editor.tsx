@@ -10,6 +10,7 @@ interface SkillContentEditorProps {
   value: string
   placeholder: string
   rows?: number
+  disabled?: boolean
   textareaRef: RefObject<HTMLTextAreaElement | null>
   selection: {
     text: string
@@ -42,6 +43,7 @@ export default function SkillContentEditor({
   value,
   placeholder,
   rows = 18,
+  disabled = false,
   textareaRef,
   selection,
   isSelectionRewriteDialogOpen,
@@ -82,10 +84,11 @@ export default function SkillContentEditor({
           onMouseUp={onSelectionChange}
           placeholder={placeholder}
           rows={rows}
-          className="app-scrollbar min-h-80 w-full resize-y border border-black px-3 py-2 pr-14 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50"
+          disabled={disabled}
+          className="app-scrollbar min-h-80 w-full resize-y border border-black px-3 py-2 pr-14 font-mono text-xs leading-6 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500"
         />
         <SelectionRewriteDialog
-          selection={selection}
+          selection={disabled ? null : selection}
           isOpen={isSelectionRewriteDialogOpen}
           instruction={selectionRewriteInstruction}
           replacementPreview={selectionRewritePreview}

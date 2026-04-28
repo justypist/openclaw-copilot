@@ -1,14 +1,14 @@
 'use client'
 
-import { useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react'
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 
 import type { SessionMessage, SessionSummary } from '@/lib/openclaw/sessions'
-import type { SkillLocation, SkillSummary } from '@/lib/skills'
+import type { FinalizedSkillDraft, SkillFileDraft, SkillFileRecord, SkillLocation, SkillSummary } from '@/lib/skills'
 
-import SkillContentEditor from './skill-content-editor'
+import SkillDraftFilesEditor from './skill-draft-files-editor'
 
 interface SessionsWorkspaceProps {
   sessions: SessionSummary[]
@@ -31,6 +31,8 @@ interface SelectionState {
   skillName: string
   skillDescription: string
   generatedSkillContent: string
+  generatedSkillFiles: SkillFileDraft[]
+  selectedSkillFilePath: string
 }
 
 interface TargetSkillReference {
@@ -51,18 +53,32 @@ interface TextareaViewState {
   selectionEnd: number
 }
 
-interface SkillFileDraft {
-  path: string
-  content: string
-}
-
-interface FinalizedSkillDraft {
-  folderName: string
-  files: SkillFileDraft[]
-}
-
 const EMPTY_MESSAGE_KEYS: string[] = []
+const EMPTY_SKILL_FILES: SkillFileDraft[] = []
+const DEFAULT_SKILL_FILE_PATH = 'SKILL.md'
 const NORMAL_MESSAGE_ROLES = new Set<SessionMessage['role']>(['user', 'assistant'])
+
+function sortSkillFiles<T extends { path: string }>(files: T[]): T[] {
+  return [...files].sort((left, right) => {
+    if (left.path === DEFAULT_SKILL_FILE_PATH) {
+      return -1
+    }
+
+    if (right.path === DEFAULT_SKILL_FILE_PATH) {
+      return 1
+    }
+
+    return left.path.localeCompare(right.path)
+  })
+}
+
+function normalizeSkillFiles(files: SkillFileDraft[], fallbackContent = ''): SkillFileDraft[] {
+  if (files.length > 0) {
+    return sortSkillFiles(files)
+  }
+
+  return [{ path: DEFAULT_SKILL_FILE_PATH, content: fallbackContent }]
+}
 
 function formatTimestamp(timestamp: number | undefined): string {
   if (!timestamp) {
@@ -128,6 +144,7 @@ export default function SessionsWorkspace({
   const generatedSkillContentRef = useRef<HTMLTextAreaElement | null>(null)
   const pendingTextareaViewStateRef = useRef<TextareaViewState | null>(null)
   const skillGenerationRequestIdRef = useRef(0)
+  const targetSkillFilesRequestIdRef = useRef(0)
   const [isPending, startTransition] = useTransition()
   const activeSessionId = selectedSession?.sessionId ?? ''
   const [selectionState, setSelectionState] = useState<SelectionState>({
@@ -140,6 +157,8 @@ export default function SessionsWorkspace({
     skillName: '',
     skillDescription: '',
     generatedSkillContent: '',
+    generatedSkillFiles: [{ path: DEFAULT_SKILL_FILE_PATH, content: '' }],
+    selectedSkillFilePath: DEFAULT_SKILL_FILE_PATH,
   })
   const hasRequestedSkillCreation =
     selectionState.sessionId === activeSessionId ? selectionState.hasRequestedSkillCreation : false
@@ -148,6 +167,10 @@ export default function SessionsWorkspace({
     selectionState.sessionId === activeSessionId ? selectionState.skillDescription : ''
   const generatedSkillContent =
     selectionState.sessionId === activeSessionId ? selectionState.generatedSkillContent : ''
+  const generatedSkillFiles =
+    selectionState.sessionId === activeSessionId ? selectionState.generatedSkillFiles : EMPTY_SKILL_FILES
+  const selectedSkillFilePath =
+    selectionState.sessionId === activeSessionId ? selectionState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH
   const skillDraftMode =
     selectionState.sessionId === activeSessionId ? selectionState.skillDraftMode : 'create'
   const targetSkillKey = selectionState.sessionId === activeSessionId ? selectionState.targetSkillKey : ''
@@ -161,13 +184,12 @@ export default function SessionsWorkspace({
   const [selectionRewritePreview, setSelectionRewritePreview] = useState<string | null>(null)
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
-  const [finalizedSkill, setFinalizedSkill] = useState<FinalizedSkillDraft | null>(null)
-  const [isFinalizingSkill, setIsFinalizingSkill] = useState(false)
   const [skillFinalizeError, setSkillFinalizeError] = useState('')
   const [isSavingSkill, setIsSavingSkill] = useState(false)
   const [skillSaveError, setSkillSaveError] = useState('')
   const [savedSkillDirectory, setSavedSkillDirectory] = useState('')
   const [showAllMessages, setShowAllMessages] = useState(false)
+  const [targetSkillFilesError, setTargetSkillFilesError] = useState('')
 
   const selectableMessages = useMemo(
     () => messages.filter((message) => isSelectableMessage(message)),
@@ -232,9 +254,78 @@ export default function SessionsWorkspace({
     textarea.scrollLeft = pendingViewState.scrollLeft
   }, [generatedSkillContent])
 
+  useEffect(() => {
+    if (skillDraftMode !== 'update' || !selectedTargetSkill || !hasRequestedSkillCreation) {
+      targetSkillFilesRequestIdRef.current += 1
+      return
+    }
+
+    const requestId = targetSkillFilesRequestIdRef.current + 1
+    targetSkillFilesRequestIdRef.current = requestId
+
+    async function loadTargetSkillFiles() {
+      if (!selectedTargetSkill) {
+        return
+      }
+
+      try {
+        const response = await fetch('/api/skills/files', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            folderName: selectedTargetSkill.folderName,
+            location: selectedTargetSkill.location,
+          }),
+        })
+
+        const result = (await response.json()) as {
+          skill?: {
+            files?: SkillFileRecord[]
+          }
+          error?: string
+        }
+
+        if (requestId !== targetSkillFilesRequestIdRef.current) {
+          return
+        }
+
+        if (!response.ok || !result.skill || !Array.isArray(result.skill.files)) {
+          throw new Error(result.error || '读取目标 skill 文件失败。')
+        }
+
+        const editableFiles = normalizeSkillFiles(
+          result.skill.files
+            .filter((file) => file.editable)
+            .map((file) => ({ path: file.path, content: file.content })),
+          selectedTargetSkill.skillContent,
+        )
+        const nextSelectedFile = editableFiles.find((file) => file.path === DEFAULT_SKILL_FILE_PATH) ?? editableFiles[0]
+
+        setSelectionState((currentState) => {
+          if (currentState.sessionId !== activeSessionId || currentState.skillDraftMode !== 'update') {
+            return currentState
+          }
+
+          return {
+            ...currentState,
+            generatedSkillContent: nextSelectedFile?.content ?? '',
+            generatedSkillFiles: editableFiles,
+            selectedSkillFilePath: nextSelectedFile?.path ?? DEFAULT_SKILL_FILE_PATH,
+          }
+        })
+      } catch (error) {
+        if (requestId === targetSkillFilesRequestIdRef.current) {
+          setTargetSkillFilesError(error instanceof Error ? error.message : '读取目标 skill 文件失败。')
+        }
+      }
+    }
+
+    void loadTargetSkillFiles()
+  }, [activeSessionId, hasRequestedSkillCreation, selectedTargetSkill, skillDraftMode])
+
   function resetFinalizedSkillState() {
-    setFinalizedSkill(null)
-    setIsFinalizingSkill(false)
     setSkillFinalizeError('')
     setIsSavingSkill(false)
     setSkillSaveError('')
@@ -336,6 +427,8 @@ export default function SessionsWorkspace({
         skillDescription:
           currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
         generatedSkillContent: '',
+        generatedSkillFiles: [{ path: DEFAULT_SKILL_FILE_PATH, content: '' }],
+        selectedSkillFilePath: DEFAULT_SKILL_FILE_PATH,
       }
     })
   }
@@ -379,6 +472,8 @@ export default function SessionsWorkspace({
       skillName: '',
       skillDescription: '',
       generatedSkillContent: '',
+      generatedSkillFiles: [{ path: DEFAULT_SKILL_FILE_PATH, content: '' }],
+      selectedSkillFilePath: DEFAULT_SKILL_FILE_PATH,
     })
     setSkillGenerationError('')
     setIsGeneratingSkill(false)
@@ -398,17 +493,35 @@ export default function SessionsWorkspace({
       skillName: skillName || selectedSession?.title || '',
       skillDescription,
       generatedSkillContent,
+      generatedSkillFiles: normalizeSkillFiles(generatedSkillFiles, generatedSkillContent),
+      selectedSkillFilePath,
     })
   }
 
   function handleSkillDraftModeChange(nextMode: SkillDraftMode) {
     resetFinalizedSkillState()
+    setTargetSkillFilesError('')
     clearSelectedFragment()
 
     const nextTargetSkill =
       nextMode === 'update' ? selectedTargetSkill ?? existingSkills[0] ?? null : null
 
-    setSelectionState((currentState) => ({
+    setSelectionState((currentState) => {
+      const currentFiles = normalizeSkillFiles(
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillFiles : [],
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      )
+      const nextFiles = nextTargetSkill
+        ? [{ path: DEFAULT_SKILL_FILE_PATH, content: nextTargetSkill.skillContent }]
+        : nextMode === 'create'
+          ? [{ path: DEFAULT_SKILL_FILE_PATH, content: '' }]
+          : currentFiles
+      const nextSelectedFilePath = nextFiles.some((file) => file.path === currentState.selectedSkillFilePath)
+        ? currentState.selectedSkillFilePath
+        : DEFAULT_SKILL_FILE_PATH
+      const nextSelectedFile = nextFiles.find((file) => file.path === nextSelectedFilePath) ?? nextFiles[0]
+
+      return {
       sessionId: activeSessionId,
       selectedMessageKeys:
         currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
@@ -424,14 +537,16 @@ export default function SessionsWorkspace({
       skillDescription:
         nextTargetSkill?.description ??
         (currentState.sessionId === activeSessionId ? currentState.skillDescription : ''),
-      generatedSkillContent:
-        nextTargetSkill?.skillContent ??
-        (nextMode === 'create' ? '' : currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : ''),
-    }))
+      generatedSkillContent: nextSelectedFile?.content ?? '',
+      generatedSkillFiles: nextFiles,
+      selectedSkillFilePath: nextSelectedFilePath,
+      }
+    })
   }
 
   function handleTargetSkillChange(nextTargetSkillKey: string) {
     resetFinalizedSkillState()
+    setTargetSkillFilesError('')
     clearSelectedFragment()
 
     const nextTargetSkill = existingSkills.find((skill) => getSkillKey(skill) === nextTargetSkillKey) ?? null
@@ -449,6 +564,8 @@ export default function SessionsWorkspace({
       skillName: nextTargetSkill?.name ?? '',
       skillDescription: nextTargetSkill?.description ?? '',
       generatedSkillContent: nextTargetSkill?.skillContent ?? '',
+      generatedSkillFiles: [{ path: DEFAULT_SKILL_FILE_PATH, content: nextTargetSkill?.skillContent ?? '' }],
+      selectedSkillFilePath: DEFAULT_SKILL_FILE_PATH,
     }))
   }
 
@@ -469,6 +586,12 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
       generatedSkillContent:
         currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      generatedSkillFiles: normalizeSkillFiles(
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillFiles : [],
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      ),
+      selectedSkillFilePath:
+        currentState.sessionId === activeSessionId ? currentState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH,
     }))
   }
 
@@ -483,6 +606,8 @@ export default function SessionsWorkspace({
       skillName,
       skillDescription,
       generatedSkillContent,
+      generatedSkillFiles: normalizeSkillFiles(generatedSkillFiles, generatedSkillContent),
+      selectedSkillFilePath,
     })
     clearSelectedFragment()
     setIsRewritingSelection(false)
@@ -506,6 +631,12 @@ export default function SessionsWorkspace({
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
       generatedSkillContent:
         currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      generatedSkillFiles: normalizeSkillFiles(
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillFiles : [],
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      ),
+      selectedSkillFilePath:
+        currentState.sessionId === activeSessionId ? currentState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH,
     }))
   }
 
@@ -526,6 +657,12 @@ export default function SessionsWorkspace({
       skillDescription: nextValue,
       generatedSkillContent:
         currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      generatedSkillFiles: normalizeSkillFiles(
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillFiles : [],
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      ),
+      selectedSkillFilePath:
+        currentState.sessionId === activeSessionId ? currentState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH,
     }))
   }
 
@@ -546,6 +683,16 @@ export default function SessionsWorkspace({
       skillDescription:
         currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
       generatedSkillContent: nextValue,
+      generatedSkillFiles: normalizeSkillFiles(
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillFiles : [],
+        currentState.sessionId === activeSessionId ? currentState.generatedSkillContent : '',
+      ).map((file) => (
+        file.path === (currentState.sessionId === activeSessionId ? currentState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH)
+          ? { ...file, content: nextValue }
+          : file
+      )),
+      selectedSkillFilePath:
+        currentState.sessionId === activeSessionId ? currentState.selectedSkillFilePath : DEFAULT_SKILL_FILE_PATH,
     }))
 
     if (
@@ -554,6 +701,33 @@ export default function SessionsWorkspace({
     ) {
       clearSelectedFragment()
     }
+  }
+
+  function handleGeneratedSkillFilesChange(nextFiles: SkillFileDraft[], nextSelectedFilePath: string) {
+    resetFinalizedSkillState()
+    const normalizedFiles = normalizeSkillFiles(nextFiles)
+    const nextSelectedFile = normalizedFiles.find((file) => file.path === nextSelectedFilePath) ?? normalizedFiles[0]
+
+    setSelectionState((currentState) => ({
+      sessionId: activeSessionId,
+      selectedMessageKeys:
+        currentState.sessionId === activeSessionId ? currentState.selectedMessageKeys : [],
+      hasRequestedSkillCreation:
+        currentState.sessionId === activeSessionId && currentState.hasRequestedSkillCreation,
+      skillDraftMode:
+        currentState.sessionId === activeSessionId ? currentState.skillDraftMode : 'create',
+      targetSkillKey: currentState.sessionId === activeSessionId ? currentState.targetSkillKey : '',
+      updateInstruction:
+        currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
+      skillName: currentState.sessionId === activeSessionId ? currentState.skillName : '',
+      skillDescription:
+        currentState.sessionId === activeSessionId ? currentState.skillDescription : '',
+      generatedSkillContent: nextSelectedFile?.content ?? '',
+      generatedSkillFiles: normalizedFiles,
+      selectedSkillFilePath: nextSelectedFile?.path ?? DEFAULT_SKILL_FILE_PATH,
+    }))
+
+    clearSelectedFragment()
   }
 
   function handleGeneratedContentSelection() {
@@ -633,6 +807,7 @@ export default function SessionsWorkspace({
 
       const result = (await response.json()) as {
         content?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
@@ -644,7 +819,7 @@ export default function SessionsWorkspace({
         throw new Error(result.error || '生成失败。')
       }
 
-      handleGeneratedSkillContentChange(result.content)
+      handleGeneratedSkillFilesChange(normalizeSkillFiles(result.files ?? [], result.content), DEFAULT_SKILL_FILE_PATH)
       clearSelectedFragment()
     } catch (error) {
       if (requestId !== skillGenerationRequestIdRef.current) {
@@ -703,6 +878,7 @@ export default function SessionsWorkspace({
 
       const result = (await response.json()) as {
         content?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
@@ -714,7 +890,7 @@ export default function SessionsWorkspace({
         throw new Error(result.error || '生成更新草稿失败。')
       }
 
-      handleGeneratedSkillContentChange(result.content)
+      handleGeneratedSkillFilesChange(normalizeSkillFiles(result.files ?? [], result.content), DEFAULT_SKILL_FILE_PATH)
       clearSelectedFragment()
     } catch (error) {
       if (requestId !== skillGenerationRequestIdRef.current) {
@@ -770,6 +946,8 @@ export default function SessionsWorkspace({
           sessionTitle: selectedSession.title,
           sessionKey: selectedSession.sessionKey,
           fullContent: generatedSkillContent,
+          currentFilePath: selectedSkillFilePath,
+          files: normalizeSkillFiles(generatedSkillFiles, generatedSkillContent),
           selectedText: skillContentSelection.text,
           instruction: trimmedInstruction,
           selectedMessages,
@@ -777,11 +955,23 @@ export default function SessionsWorkspace({
       })
 
       const result = (await response.json()) as {
+        mode?: 'draft'
         replacement?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
-      if (!response.ok || typeof result.replacement !== 'string') {
+      if (!response.ok) {
+        throw new Error(result.error || '局部修改失败。')
+      }
+
+      if (result.mode === 'draft' && Array.isArray(result.files)) {
+        handleGeneratedSkillFilesChange(result.files, selectedSkillFilePath)
+        clearSelectedFragment()
+        return
+      }
+
+      if (typeof result.replacement !== 'string') {
         throw new Error(result.error || '局部修改失败。')
       }
 
@@ -821,82 +1011,11 @@ export default function SessionsWorkspace({
     clearSelectedFragment()
   }
 
-  async function handleFinalizeSkill() {
-    if (!selectedSession) {
-      return
-    }
-
-    const trimmedSkillName = skillName.trim()
-    const trimmedSkillDescription = skillDescription.trim()
-    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
-
-    if (!trimmedSkillName) {
-      setSkillFinalizeError('请先填写 skill name。')
-      return
-    }
-
-    if (!trimmedSkillDescription) {
-      setSkillFinalizeError('请先填写 skill description。')
-      return
-    }
-
-    if (!trimmedGeneratedSkillContent) {
-      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
-      return
-    }
-
-    setIsFinalizingSkill(true)
-    setSkillFinalizeError('')
-    setSkillSaveError('')
-    setSavedSkillDirectory('')
-
-    try {
-      const response = await fetch('/api/skills/finalize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: trimmedSkillName,
-          description: trimmedSkillDescription,
-          sessionTitle: selectedSession.title,
-          sessionKey: selectedSession.sessionKey,
-          fullContent: trimmedGeneratedSkillContent,
-          selectedMessages,
-        }),
-      })
-
-      const result = (await response.json()) as {
-        folderName?: string
-        files?: SkillFileDraft[]
-        error?: string
-      }
-
-      if (
-        !response.ok ||
-        typeof result.folderName !== 'string' ||
-        !Array.isArray(result.files) ||
-        result.files.length === 0
-      ) {
-        throw new Error(result.error || '定稿失败。')
-      }
-
-      setFinalizedSkill({
-        folderName: result.folderName,
-        files: result.files,
-      })
-    } catch (error) {
-      setSkillFinalizeError(error instanceof Error ? error.message : '定稿失败。')
-      setFinalizedSkill(null)
-    } finally {
-      setIsFinalizingSkill(false)
-    }
-  }
-
   function buildDirectSaveDraft(): FinalizedSkillDraft | null {
     const trimmedSkillName = skillName.trim()
     const trimmedSkillDescription = skillDescription.trim()
-    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+    const draftFiles = normalizeSkillFiles(generatedSkillFiles, generatedSkillContent)
+    const skillFileContent = draftFiles.find((file) => file.path === DEFAULT_SKILL_FILE_PATH)?.content.trim() ?? ''
 
     if (!trimmedSkillName) {
       setSkillFinalizeError('请先填写 skill name。')
@@ -908,19 +1027,14 @@ export default function SessionsWorkspace({
       return null
     }
 
-    if (!trimmedGeneratedSkillContent) {
-      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
+    if (!skillFileContent) {
+      setSkillFinalizeError('请先生成或填写 SKILL.md 内容。')
       return null
     }
 
     return {
       folderName: trimmedSkillName,
-      files: [
-        {
-          path: 'SKILL.md',
-          content: trimmedGeneratedSkillContent,
-        },
-      ],
+      files: draftFiles,
     }
   }
 
@@ -961,10 +1075,11 @@ export default function SessionsWorkspace({
       return
     }
 
-    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+    const draftFiles = normalizeSkillFiles(generatedSkillFiles, generatedSkillContent)
+    const skillFileContent = draftFiles.find((file) => file.path === DEFAULT_SKILL_FILE_PATH)?.content.trim() ?? ''
 
-    if (!trimmedGeneratedSkillContent) {
-      setSkillSaveError('请先生成或填写完整 skill 内容。')
+    if (!skillFileContent) {
+      setSkillSaveError('请先生成或填写 SKILL.md 内容。')
       return
     }
 
@@ -981,7 +1096,7 @@ export default function SessionsWorkspace({
         body: JSON.stringify({
           folderName: selectedTargetSkill.folderName,
           location: selectedTargetSkill.location,
-          content: trimmedGeneratedSkillContent,
+          files: draftFiles,
         }),
       })
 
@@ -1008,7 +1123,9 @@ export default function SessionsWorkspace({
           currentState.sessionId === activeSessionId ? currentState.updateInstruction : '',
         skillName: savedSkill.name,
         skillDescription: savedSkill.description,
-        generatedSkillContent: savedSkill.skillContent,
+        generatedSkillContent: skillFileContent,
+        generatedSkillFiles: draftFiles,
+        selectedSkillFilePath,
       }))
       setSavedSkillDirectory(
         `${savedSkill.location === 'enabled' ? 'workspace/skills' : 'workspace/skills.available'}/${savedSkill.folderName}`,
@@ -1021,14 +1138,6 @@ export default function SessionsWorkspace({
     } finally {
       setIsSavingSkill(false)
     }
-  }
-
-  async function handleSaveSkill() {
-    if (!finalizedSkill) {
-      return
-    }
-
-    await saveSkillDraft(finalizedSkill)
   }
 
   async function handleDirectSaveSkill() {
@@ -1044,7 +1153,6 @@ export default function SessionsWorkspace({
     }
 
     setSkillFinalizeError('')
-    setFinalizedSkill(draft)
     await saveSkillDraft(draft)
   }
 
@@ -1310,7 +1418,7 @@ export default function SessionsWorkspace({
                                 {selectedTargetSkill.folderName}
                               </p>
                               {selectedTargetSkill.filePaths.length > 1 ? (
-                                <p className="mt-2 text-xs">保存时只会更新该目录下的 `SKILL.md`。</p>
+                                <p className="mt-2 text-xs">保存时会写回当前草稿中的所有文本文件。</p>
                               ) : null}
                             </div>
                           ) : null}
@@ -1357,15 +1465,16 @@ export default function SessionsWorkspace({
                     </section>
 
                   <section className="border border-black p-4 sm:p-5">
-                    <SkillContentEditor
+                    <SkillDraftFilesEditor
+                      files={normalizeSkillFiles(generatedSkillFiles, generatedSkillContent)}
+                      selectedFilePath={selectedSkillFilePath}
                       title={skillDraftMode === 'update' ? 'Updated Skill Content' : 'Generated Content'}
                       description={
                         skillDraftMode === 'update'
-                          ? '这里是所选 Skill 的 SKILL.md 草稿。生成更新后可继续手动编辑，再写回原 Skill。'
-                          : '生成后可直接在下方继续编辑，作为后续局部修改与保存的基础内容。'
+                          ? '这里是所选 Skill 的文件草稿。生成更新后可继续手动编辑，再写回原 Skill。'
+                          : '生成后可直接在下方继续编辑文件集合，作为后续局部修改与保存的基础内容。'
                       }
-                      value={generatedSkillContent}
-                      placeholder={skillDraftMode === 'update' ? '选择已有 Skill 后会显示当前 SKILL.md。' : '生成结果会出现在这里。'}
+                      placeholder={skillDraftMode === 'update' ? '选择已有 Skill 后会显示当前文件内容。' : '生成结果会出现在这里。'}
                       textareaRef={generatedSkillContentRef}
                       selection={skillContentSelection}
                       isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
@@ -1379,7 +1488,7 @@ export default function SessionsWorkspace({
                       selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
                       selectionRewriteConfirmLabel="确认替换"
                       selectionRewriteTriggerLabel="打开选区改写弹窗"
-                      onChange={handleGeneratedSkillContentChange}
+                      onFilesChange={handleGeneratedSkillFilesChange}
                       onSelectionChange={handleGeneratedContentSelection}
                       onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
                       onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
@@ -1396,7 +1505,7 @@ export default function SessionsWorkspace({
                         <div className="flex flex-col gap-2">
                           <h4 className="text-sm font-medium">Save Existing Skill</h4>
                           <p className="text-sm text-neutral-600">
-                            修改满意后，可把当前内容写回所选 Skill 的 `SKILL.md`。
+                            修改满意后，可把当前文件集合写回所选 Skill。
                           </p>
                         </div>
 
@@ -1430,7 +1539,7 @@ export default function SessionsWorkspace({
                               >
                                 {isSavingSkill ? 'Saving...' : 'Save to Existing Skill'}
                               </button>
-                              <span className="text-sm text-neutral-500">只会覆盖所选目录下的 `SKILL.md`。</span>
+                              <span className="text-sm text-neutral-500">会保存当前草稿中的所有文本文件。</span>
                             </>
                           )}
                         </div>
@@ -1440,44 +1549,54 @@ export default function SessionsWorkspace({
                             {skillSaveError}
                           </div>
                         ) : null}
+
+                        {targetSkillFilesError ? (
+                          <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
+                            {targetSkillFilesError}
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="mt-4 border border-black bg-neutral-50 p-4">
                         <div className="flex flex-col gap-2">
-                          <h4 className="text-sm font-medium">Finalize & Save</h4>
+                          <h4 className="text-sm font-medium">Save Skill Files</h4>
                           <p className="text-sm text-neutral-600">
-                            修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
+                            修改满意后，直接把当前文件集合保存到 `workspace/skills.available`。
                           </p>
                         </div>
 
                         <div className="mt-4 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleFinalizeSkill()
-                            }}
-                            disabled={isFinalizingSkill}
-                            className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                          >
-                            {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleDirectSaveSkill()
-                            }}
-                            disabled={isSavingSkill}
-                            className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-                          >
-                            {isSavingSkill ? 'Saving...' : 'Direct Save as SKILL.md'}
-                          </button>
-
-                          {finalizedSkill ? (
-                            <span className="text-sm text-neutral-500">
-                              目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
-                            </span>
+                          {savedSkillDirectory ? (
+                            <>
+                              <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                              <button
+                                type="button"
+                                onClick={handleFinishSkillCreation}
+                                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                              >
+                                完成并返回时间线
+                              </button>
+                              <Link
+                                href="/skills"
+                                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
+                              >
+                                查看 Skills Library
+                              </Link>
+                            </>
                           ) : (
-                            <span className="text-sm text-neutral-500">可先定稿拆分，也可直接把当前内容保存为 `SKILL.md`。</span>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleDirectSaveSkill()
+                                }}
+                                disabled={isSavingSkill}
+                                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                              >
+                                {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
+                              </button>
+                              <span className="text-sm text-neutral-500">将写入当前文件集合，包含 `SKILL.md` 和所有辅助文件。</span>
+                            </>
                           )}
                         </div>
 
@@ -1490,59 +1609,6 @@ export default function SessionsWorkspace({
                         {skillSaveError ? (
                           <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
                             {skillSaveError}
-                          </div>
-                        ) : null}
-
-                        {finalizedSkill ? (
-                          <div className="mt-4 grid gap-4">
-                            {finalizedSkill.files.map((file) => (
-                              <div key={file.path} className="border border-black bg-white p-3">
-                                <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                                  <span>{file.path}</span>
-                                  <span>{file.content.length} chars</span>
-                                </div>
-                                <pre className="app-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-                                  {file.content}
-                                </pre>
-                              </div>
-                            ))}
-
-                            <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
-                              {savedSkillDirectory ? (
-                                <>
-                                  <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
-                                  <button
-                                    type="button"
-                                    onClick={handleFinishSkillCreation}
-                                    className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
-                                  >
-                                    完成并返回时间线
-                                  </button>
-                                  <Link
-                                    href="/skills"
-                                    className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100"
-                                  >
-                                    查看 Skills Library
-                                  </Link>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      void handleSaveSkill()
-                                    }}
-                                    disabled={isSavingSkill}
-                                    className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                                  >
-                                    {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
-                                  </button>
-                                  <span className="text-sm text-neutral-500">
-                                    将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
-                                  </span>
-                                </>
-                              )}
-                            </div>
                           </div>
                         ) : null}
                       </div>

@@ -1,12 +1,14 @@
-import { streamText } from 'ai'
+import { streamText, Output } from 'ai'
+import { z } from 'zod'
 
 import { options } from '@/lib/ai'
 import {
   buildConversationContextForAi,
-  buildSkillSourcesContextForAi,
-  getSkillSources,
+  buildSkillFileSetContextForAi,
+  getSkillFileSet,
   isSessionMessageArray,
   SkillsInputError,
+  validateFinalizedSkillDraft,
   type SkillLocation,
 } from '@/lib/skills'
 
@@ -22,6 +24,18 @@ interface SkillReferenceInput {
   folderName?: unknown
   location?: unknown
 }
+
+const updatedSkillSchema = z.object({
+  folderName: z.string().min(1),
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        content: z.string().min(1),
+      }),
+    )
+    .min(1),
+})
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -79,40 +93,50 @@ export async function POST(request: Request) {
   }
 
   try {
-    const [source] = await getSkillSources({ skills: [targetSkill] })
-    const sourcesContext = buildSkillSourcesContextForAi([source])
+    const fileSet = await getSkillFileSet(targetSkill)
+    const fileSetContext = buildSkillFileSetContextForAi(fileSet)
     const conversationContext = buildConversationContextForAi(body.selectedMessages)
 
-    const { text } = streamText({
+    const { output } = streamText({
       ...options,
+      output: Output.object({
+        name: 'UpdatedSkillDraft',
+        description: '基于聊天记录更新后的可审查 skill 文件集合',
+        schema: updatedSkillSchema,
+      }),
       system: [
-        '你负责用用户选中的聊天记录更新一个已经存在的 SKILL.md。',
-        '你必须返回更新后的完整 SKILL.md，不要添加解释，不要使用代码围栏包裹整个结果。',
-        '文档开头必须保留合法 YAML frontmatter，至少包含 name 和 description。',
+        '你负责用用户选中的聊天记录更新一个已经存在的 skill 文件集合。',
+        '你必须返回符合 schema 的结构化对象，不要输出解释。',
+        '最终结果必须包含 SKILL.md，且其中必须保留合法 YAML frontmatter，至少包含 name 和 description。',
+        '返回的是保存前供用户审查的完整文本文件草稿；保留仍然正确的现有文本文件，必要时新增或删除辅助文件。',
+        '不要返回只读文件内容；如果只读文件无需变化，忽略它，系统会在保存前继续保留只读文件。',
+        '所有 path 必须是相对路径，不能以 / 开头，不能包含 ..。',
         '优先把新信息合并进现有结构，保留仍然正确的原内容，删除或修正已经被新记录证明不准确的内容。',
         '必须遵循用户的更新指令；如果指令与记录冲突，以记录中可验证的信息为准。',
         '内容必须忠实于现有 skill 和聊天记录，不要编造仓库中不存在的命令、文件或工具。',
       ].join('\n'),
       prompt: [
-        `Target skill name: ${source.name}`,
-        `Target skill description: ${source.description}`,
-        `Target skill folder: ${source.folderName}`,
-        `Target skill location: ${source.location}`,
+        `Target skill name: ${fileSet.name}`,
+        `Target skill description: ${fileSet.description}`,
+        `Target skill folder: ${fileSet.folderName}`,
+        `Target skill location: ${fileSet.location}`,
         `Session title: ${sessionTitle || 'unknown'}`,
         `Session key: ${sessionKey || 'unknown'}`,
         '',
         '## User Update Instruction',
         instruction,
         '',
-        '## Existing Skill Source',
-        sourcesContext,
+        '## Current Skill File Set',
+        fileSetContext,
         '',
         '## Selected Timeline Context',
         conversationContext,
       ].join('\n'),
     })
+    const draft = validateFinalizedSkillDraft(await output)
+    const skillContent = draft.files.find((file) => file.path === 'SKILL.md')?.content ?? ''
 
-    return Response.json({ content: await text })
+    return Response.json({ ...draft, content: skillContent })
   } catch (error) {
     if (error instanceof SkillsInputError) {
       return Response.json({ error: error.message }, { status: 400 })

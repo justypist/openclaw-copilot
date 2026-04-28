@@ -1,7 +1,14 @@
-import { streamText } from 'ai'
+import { streamText, Output } from 'ai'
+import { z } from 'zod'
 
 import { options } from '@/lib/ai'
-import { buildConversationContextForAi, isSessionMessageArray, SkillsInputError } from '@/lib/skills'
+import {
+  buildConversationContextForAi,
+  isSessionMessageArray,
+  SkillsInputError,
+  slugifySkillName,
+  validateFinalizedSkillDraft,
+} from '@/lib/skills'
 
 interface GenerateSkillRequestBody {
   name?: unknown
@@ -10,6 +17,18 @@ interface GenerateSkillRequestBody {
   sessionKey?: unknown
   selectedMessages?: unknown
 }
+
+const generatedSkillSchema = z.object({
+  folderName: z.string().min(1),
+  files: z
+    .array(
+      z.object({
+        path: z.string().min(1),
+        content: z.string().min(1),
+      }),
+    )
+    .min(1),
+})
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -47,29 +66,42 @@ export async function POST(request: Request) {
 
   try {
     const conversationContext = buildConversationContextForAi(body.selectedMessages)
+    const suggestedFolderName = slugifySkillName(name)
 
-    const { text } = streamText({
+    const { output } = streamText({
       ...options,
+      output: Output.object({
+        name: 'GeneratedSkillDraft',
+        description: '基于聊天记录生成的可审查 skill 文件集合',
+        schema: generatedSkillSchema,
+      }),
       system: [
-        '你负责把用户选中的聊天记录整理成一个可直接落地的 SKILL.md。',
-        '你必须返回一个完整 Markdown，不要添加解释，不要使用代码围栏包裹整个结果。',
-        '文档开头必须包含 YAML frontmatter，至少包含 name 和 description。',
-        '正文应尽量清晰、可执行，优先包含：这个 skill 做什么、何时使用、操作步骤、注意事项。',
+        '你负责把用户选中的聊天记录整理成一个可直接落地的 skill 文件集合。',
+        '你必须返回符合 schema 的结构化对象，不要输出解释。',
+        '最终结果必须包含 SKILL.md，且其中必须保留合法 YAML frontmatter，至少包含 name 和 description。',
+        '如果内容较短且自洽，只返回一个文件：SKILL.md。',
+        '如果内容较长，可以拆分出少量辅助文件，例如 docs/*.md 或 resources/*.md，但不要过度拆分。',
+        '所有 path 必须是相对路径，不能以 / 开头，不能包含 ..。',
+        'folderName 应稳定、简洁，适合作为 workspace/skills.available 下的目录名。',
+        'SKILL.md 正文应尽量清晰、可执行，优先包含：这个 skill 做什么、何时使用、操作步骤、注意事项。',
         '内容要忠实于聊天记录，不要编造仓库中不存在的命令、文件或工具。',
       ].join('\n'),
       prompt: [
         `Skill name: ${name}`,
         `Skill description: ${description}`,
+        `Suggested folder name: ${suggestedFolderName}`,
         `Session title: ${sessionTitle || 'unknown'}`,
         `Session key: ${sessionKey || 'unknown'}`,
         '',
-        '请基于以下时间线记录，生成完整 SKILL.md 内容：',
+        '请基于以下时间线记录，生成完整 skill 文件集合：',
         '',
         conversationContext,
       ].join('\n'),
     })
+    const draft = validateFinalizedSkillDraft(await output)
+    const skillContent = draft.files.find((file) => file.path === 'SKILL.md')?.content ?? ''
 
-    return Response.json({ content: await text })
+    return Response.json({ ...draft, content: skillContent })
   } catch (error) {
     if (error instanceof SkillsInputError) {
       return Response.json({ error: error.message }, { status: 400 })

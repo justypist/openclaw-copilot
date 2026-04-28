@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { access, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -24,6 +24,7 @@ const MAX_AI_SELECTED_MESSAGES = 200
 const MAX_AI_SKILL_CONTENT_LENGTH = 100_000
 const MAX_AI_CONVERSATION_CONTEXT_LENGTH = 120_000
 const MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH = 160_000
+const MAX_EDITABLE_SKILL_FILE_BYTES = 256 * 1024
 
 export class SkillsInputError extends Error {
   constructor(message: string) {
@@ -35,6 +36,14 @@ export class SkillsInputError extends Error {
 export interface SkillFileDraft {
   path: string
   content: string
+}
+
+export type SkillFileReadOnlyReason = 'binary' | 'too-large' | 'unsupported-encoding' | 'protected'
+
+export interface SkillFileRecord extends SkillFileDraft {
+  size: number
+  editable: boolean
+  readOnlyReason?: SkillFileReadOnlyReason
 }
 
 export interface FinalizedSkillDraft {
@@ -61,6 +70,10 @@ export interface SkillReference {
 
 export interface SkillSource extends SkillSummary {
   files: SkillFileDraft[]
+}
+
+export interface SkillFileSet extends SkillSummary {
+  files: SkillFileRecord[]
 }
 
 export interface SkillsLibrary {
@@ -228,6 +241,67 @@ export function buildSkillSourcesContextForAi(sources: SkillSource[]): string {
   return sourcesContext
 }
 
+export function buildSkillFileSetContextForAi(fileSet: SkillFileSet): string {
+  const lines = [
+    `# Skill: ${fileSet.name}`,
+    `- folderName: ${fileSet.folderName}`,
+    `- location: ${fileSet.location}`,
+    `- description: ${fileSet.description}`,
+    `- fileCount: ${fileSet.files.length}`,
+  ]
+
+  for (const file of fileSet.files) {
+    lines.push('')
+    lines.push(`## File: ${file.path}`)
+    lines.push(`- size: ${file.size}`)
+    lines.push(`- editable: ${file.editable ? 'true' : 'false'}`)
+
+    if (file.readOnlyReason) {
+      lines.push(`- readOnlyReason: ${file.readOnlyReason}`)
+    }
+
+    if (file.editable) {
+      lines.push('```md')
+      lines.push(file.content)
+      lines.push('```')
+    } else {
+      lines.push('(content omitted because this file is read-only)')
+    }
+  }
+
+  const fileSetContext = lines.join('\n')
+
+  assertMaxLength(
+    fileSetContext,
+    MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH,
+    `当前 skill 文件集内容过长，最多允许 ${MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH} 个字符。请减少文件内容后重试。`,
+  )
+
+  return fileSetContext
+}
+
+export function buildSkillFileDraftsContextForAi(files: SkillFileDraft[], currentFilePath: string): string {
+  const lines = [`# Current Skill Draft Files`, `- currentFilePath: ${currentFilePath}`, `- fileCount: ${files.length}`]
+
+  for (const file of files) {
+    lines.push('')
+    lines.push(`## File: ${file.path}${file.path === currentFilePath ? ' (current)' : ''}`)
+    lines.push('```md')
+    lines.push(file.content)
+    lines.push('```')
+  }
+
+  const filesContext = lines.join('\n')
+
+  assertMaxLength(
+    filesContext,
+    MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH,
+    `当前 skill 草稿文件集内容过长，最多允许 ${MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH} 个字符。请减少文件内容后重试。`,
+  )
+
+  return filesContext
+}
+
 export function validateSkillContentForAi(value: string): string {
   assertMaxLength(
     value,
@@ -318,7 +392,100 @@ async function collectSkillFiles(directory: string, parentPath = ''): Promise<st
     }),
   )
 
-  return files.flat().sort((left, right) => left.localeCompare(right))
+  return files.flat().sort((left, right) => {
+    if (left === 'SKILL.md') {
+      return -1
+    }
+
+    if (right === 'SKILL.md') {
+      return 1
+    }
+
+    return left.localeCompare(right)
+  })
+}
+
+function readTextFromSkillFile(buffer: Buffer):
+  | {
+      ok: true
+      content: string
+    }
+  | {
+      ok: false
+      reason: SkillFileReadOnlyReason
+    } {
+  if (buffer.includes(0)) {
+    return { ok: false, reason: 'binary' }
+  }
+
+  try {
+    return {
+      ok: true,
+      content: new TextDecoder('utf-8', { fatal: true }).decode(buffer),
+    }
+  } catch {
+    return { ok: false, reason: 'unsupported-encoding' }
+  }
+}
+
+async function readSkillFileRecords(directory: string, filePaths: string[]): Promise<SkillFileRecord[]> {
+  return Promise.all(
+    filePaths.map(async (filePath) => {
+      const buffer = await readFile(join(directory, filePath))
+      const decoded = readTextFromSkillFile(buffer)
+
+      if (!decoded.ok) {
+        return {
+          path: filePath,
+          content: '',
+          size: buffer.byteLength,
+          editable: false,
+          readOnlyReason: decoded.reason,
+        } satisfies SkillFileRecord
+      }
+
+      const tooLarge = buffer.byteLength > MAX_EDITABLE_SKILL_FILE_BYTES
+
+      return {
+        path: filePath,
+        content: decoded.content,
+        size: buffer.byteLength,
+        editable: !tooLarge,
+        readOnlyReason: tooLarge ? 'too-large' : undefined,
+      } satisfies SkillFileRecord
+    }),
+  )
+}
+
+async function readSkillFileSet(
+  directory: string,
+  location: SkillLocation,
+  folderName: string,
+): Promise<SkillFileSet> {
+  const normalizedFolderName = validateSkillDirectoryName(folderName)
+  const skillDirectory = join(directory, normalizedFolderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${normalizedFolderName}`)
+  }
+
+  const filePaths = await collectSkillFiles(skillDirectory)
+  const files = await readSkillFileRecords(skillDirectory, filePaths)
+  const skillContent = files.find((file) => file.path === 'SKILL.md')?.content ?? ''
+  const metadata = parseSkillMetadata(skillContent, normalizedFolderName)
+  const skillStat = await stat(skillDirectory)
+
+  return {
+    folderName: normalizedFolderName,
+    location,
+    name: metadata.name,
+    description: metadata.description,
+    skillContent,
+    filePaths,
+    updatedAt: skillStat.mtimeMs,
+    files,
+  }
 }
 
 async function listSkillsFromDirectory(
@@ -404,6 +571,23 @@ async function readSkillSource(
   }
 }
 
+export async function getSkillFileSet(input: {
+  location: SkillLocation
+  folderName: string
+}): Promise<SkillFileSet> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  return readSkillFileSet(
+    resolveSkillDirectory(context.data, input.location),
+    input.location,
+    input.folderName,
+  )
+}
+
 function toSkillSummary(source: SkillSource): SkillSummary {
   return {
     folderName: source.folderName,
@@ -423,16 +607,30 @@ function resolveSkillDirectory(context: SkillsContext, location: SkillLocation):
 export function validateFinalizedSkillDraft(input: FinalizedSkillDraft): FinalizedSkillDraft {
   const folderName = slugifySkillName(normalizeText(input.folderName))
 
-  if (!Array.isArray(input.files) || input.files.length === 0) {
+  return {
+    folderName,
+    files: validateSkillFileDrafts(input.files),
+  }
+}
+
+export function validateSkillFileDrafts(input: SkillFileDraft[]): SkillFileDraft[] {
+  if (!Array.isArray(input) || input.length === 0) {
     throw new Error('至少需要一个 skill 文件。')
   }
 
-  const files = input.files.map((file) => {
+  const seenPaths = new Set<string>()
+  const files = input.map((file) => {
     const path = validateSkillFilePath(file.path)
     const content = typeof file.content === 'string' ? file.content.trim() : ''
 
-    if (!content) {
-      throw new Error(`skill 文件内容为空：${path}`)
+    if (seenPaths.has(path)) {
+      throw new Error(`skill 文件路径重复：${path}`)
+    }
+
+    seenPaths.add(path)
+
+    if (path === 'SKILL.md' && !content) {
+      throw new Error('SKILL.md 内容不能为空。')
     }
 
     return {
@@ -447,10 +645,7 @@ export function validateFinalizedSkillDraft(input: FinalizedSkillDraft): Finaliz
     throw new Error('最终结果必须包含 SKILL.md。')
   }
 
-  return {
-    folderName,
-    files,
-  }
+  return files
 }
 
 export async function resolveSkillsContext(): Promise<
@@ -803,6 +998,98 @@ export async function updateSkillContent(input: {
   )
 
   return toSkillSummary(updatedSkill)
+}
+
+export async function updateSkillFiles(input: {
+  location: SkillLocation
+  folderName: string
+  files: SkillFileDraft[]
+}): Promise<SkillFileSet> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  const folderName = validateSkillDirectoryName(input.folderName)
+  const files = validateSkillFileDrafts(input.files)
+  const skillContent = files.find((file) => file.path === 'SKILL.md')?.content ?? ''
+  const skillsDirectory = resolveSkillDirectory(context.data, input.location)
+  const skillDirectory = join(skillsDirectory, folderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${folderName}`)
+  }
+
+  const nextFolderName = validateSkillDirectoryName(slugifySkillName(parseSkillMetadata(skillContent, folderName).name))
+  const nextSkillDirectory = join(skillsDirectory, nextFolderName)
+
+  if (nextFolderName !== folderName && (await pathExists(nextSkillDirectory))) {
+    throw new Error(`目标目录已存在同名 skill：${nextFolderName}`)
+  }
+
+  const transientDirectorySuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const stagingSkillDirectory = join(
+    skillsDirectory,
+    `.${nextFolderName}.staging-${transientDirectorySuffix}`,
+  )
+  const backupSkillDirectory = join(
+    skillsDirectory,
+    `.${folderName}.backup-${transientDirectorySuffix}`,
+  )
+
+  await mkdir(skillsDirectory, { recursive: true })
+  await mkdir(stagingSkillDirectory, { recursive: true })
+
+  await Promise.all(
+    files.map(async (file) => {
+      const targetPath = join(stagingSkillDirectory, file.path)
+
+      await mkdir(dirname(targetPath), { recursive: true })
+      await writeFile(targetPath, `${file.content.trim()}\n`, 'utf8')
+    }),
+  )
+
+  const existingFilePaths = await collectSkillFiles(skillDirectory)
+  const existingFiles = await readSkillFileRecords(skillDirectory, existingFilePaths)
+  const nextFilePathSet = new Set(files.map((file) => file.path))
+
+  await Promise.all(
+    existingFiles
+      .filter((file) => !file.editable && !nextFilePathSet.has(file.path))
+      .map(async (file) => {
+        const targetPath = join(stagingSkillDirectory, file.path)
+
+        await mkdir(dirname(targetPath), { recursive: true })
+        await copyFile(join(skillDirectory, file.path), targetPath)
+      }),
+  )
+
+  try {
+    await rename(skillDirectory, backupSkillDirectory)
+    await rename(stagingSkillDirectory, nextSkillDirectory)
+  } catch (error) {
+    if (await pathExists(stagingSkillDirectory)) {
+      await rm(stagingSkillDirectory, { recursive: true, force: true })
+    }
+
+    if (!(await pathExists(skillDirectory)) && (await pathExists(backupSkillDirectory))) {
+      await rename(backupSkillDirectory, skillDirectory)
+    }
+
+    throw error
+  }
+
+  if (await pathExists(backupSkillDirectory)) {
+    await rm(backupSkillDirectory, { recursive: true, force: true })
+  }
+
+  const now = new Date()
+
+  await utimes(nextSkillDirectory, now, now)
+
+  return readSkillFileSet(skillsDirectory, input.location, nextFolderName)
 }
 
 export async function writeFinalizedSkillDraft(input: FinalizedSkillDraft): Promise<{

@@ -4,11 +4,14 @@ import { z } from 'zod'
 import { options } from '@/lib/ai'
 import {
   buildConversationContextForAi,
+  buildSkillFileDraftsContextForAi,
   isSessionMessageArray,
   slugifySkillName,
   SkillsInputError,
   validateSkillContentForAi,
   validateFinalizedSkillDraft,
+  validateSkillFileDrafts,
+  type SkillFileDraft,
 } from '@/lib/skills'
 
 interface FinalizeSkillRequestBody {
@@ -17,6 +20,8 @@ interface FinalizeSkillRequestBody {
   sessionTitle?: unknown
   sessionKey?: unknown
   fullContent?: unknown
+  currentFilePath?: unknown
+  files?: unknown
   selectedMessages?: unknown
 }
 
@@ -36,6 +41,21 @@ function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function parseSkillFileDrafts(value: unknown): SkillFileDraft[] | null {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  return value.map((item) => {
+    const candidate = item as Partial<Record<keyof SkillFileDraft, unknown>>
+
+    return {
+      path: typeof candidate.path === 'string' ? candidate.path : '',
+      content: typeof candidate.content === 'string' ? candidate.content : '',
+    }
+  })
+}
+
 export async function POST(request: Request) {
   let body: FinalizeSkillRequestBody
 
@@ -50,6 +70,8 @@ export async function POST(request: Request) {
   const sessionTitle = normalizeText(body.sessionTitle)
   const sessionKey = normalizeText(body.sessionKey)
   const fullContent = typeof body.fullContent === 'string' ? body.fullContent : ''
+  const currentFilePath = normalizeText(body.currentFilePath) || 'SKILL.md'
+  const files = parseSkillFileDrafts(body.files)
 
   if (!name) {
     return Response.json({ error: '缺少 skill name。' }, { status: 400 })
@@ -59,7 +81,7 @@ export async function POST(request: Request) {
     return Response.json({ error: '缺少 skill description。' }, { status: 400 })
   }
 
-  if (!fullContent.trim()) {
+  if (!files && !fullContent.trim()) {
     return Response.json({ error: '缺少完整 skill 内容。' }, { status: 400 })
   }
 
@@ -74,7 +96,9 @@ export async function POST(request: Request) {
   const suggestedFolderName = slugifySkillName(name)
 
   try {
-    const validatedFullContent = validateSkillContentForAi(fullContent.trim())
+    const draftContext = files
+      ? buildSkillFileDraftsContextForAi(validateSkillFileDrafts(files), currentFilePath)
+      : validateSkillContentForAi(fullContent.trim())
     const conversationContext = buildConversationContextForAi(body.selectedMessages)
 
     const { output } = streamText({
@@ -85,7 +109,7 @@ export async function POST(request: Request) {
         schema: finalizedSkillSchema,
       }),
       system: [
-        '你负责把一份已经过人工调整的 skill 草稿整理成最终可保存的技能目录。',
+        '你负责把已经过人工调整的 skill 草稿整理成最终可保存的技能目录。',
         '你必须返回符合 schema 的结构化对象，不要输出解释。',
         '最终结果必须包含 SKILL.md，且其中必须保留合法 YAML frontmatter，至少包含 name 和 description。',
         '如果内容较短且自洽，只返回一个文件：SKILL.md。',
@@ -101,8 +125,8 @@ export async function POST(request: Request) {
         `Session title: ${sessionTitle || 'unknown'}`,
         `Session key: ${sessionKey || 'unknown'}`,
         '',
-        '## Current Skill Draft',
-        validatedFullContent,
+        files ? '## Current Skill Draft Files' : '## Current Skill Draft',
+        draftContext,
         '',
         '## Timeline Context',
         conversationContext,
