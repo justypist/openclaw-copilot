@@ -629,8 +629,8 @@ export function validateSkillFileDrafts(input: SkillFileDraft[]): SkillFileDraft
 
     seenPaths.add(path)
 
-    if (!content) {
-      throw new Error(`skill 文件内容为空：${path}`)
+    if (path === 'SKILL.md' && !content) {
+      throw new Error('SKILL.md 内容不能为空。')
     }
 
     return {
