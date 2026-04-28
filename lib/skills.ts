@@ -24,6 +24,7 @@ const MAX_AI_SELECTED_MESSAGES = 200
 const MAX_AI_SKILL_CONTENT_LENGTH = 100_000
 const MAX_AI_CONVERSATION_CONTEXT_LENGTH = 120_000
 const MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH = 160_000
+const MAX_EDITABLE_SKILL_FILE_BYTES = 256 * 1024
 
 export class SkillsInputError extends Error {
   constructor(message: string) {
@@ -35,6 +36,14 @@ export class SkillsInputError extends Error {
 export interface SkillFileDraft {
   path: string
   content: string
+}
+
+export type SkillFileReadOnlyReason = 'binary' | 'too-large' | 'unsupported-encoding' | 'protected'
+
+export interface SkillFileRecord extends SkillFileDraft {
+  size: number
+  editable: boolean
+  readOnlyReason?: SkillFileReadOnlyReason
 }
 
 export interface FinalizedSkillDraft {
@@ -61,6 +70,10 @@ export interface SkillReference {
 
 export interface SkillSource extends SkillSummary {
   files: SkillFileDraft[]
+}
+
+export interface SkillFileSet extends SkillSummary {
+  files: SkillFileRecord[]
 }
 
 export interface SkillsLibrary {
@@ -318,7 +331,100 @@ async function collectSkillFiles(directory: string, parentPath = ''): Promise<st
     }),
   )
 
-  return files.flat().sort((left, right) => left.localeCompare(right))
+  return files.flat().sort((left, right) => {
+    if (left === 'SKILL.md') {
+      return -1
+    }
+
+    if (right === 'SKILL.md') {
+      return 1
+    }
+
+    return left.localeCompare(right)
+  })
+}
+
+function readTextFromSkillFile(buffer: Buffer):
+  | {
+      ok: true
+      content: string
+    }
+  | {
+      ok: false
+      reason: SkillFileReadOnlyReason
+    } {
+  if (buffer.includes(0)) {
+    return { ok: false, reason: 'binary' }
+  }
+
+  try {
+    return {
+      ok: true,
+      content: new TextDecoder('utf-8', { fatal: true }).decode(buffer),
+    }
+  } catch {
+    return { ok: false, reason: 'unsupported-encoding' }
+  }
+}
+
+async function readSkillFileRecords(directory: string, filePaths: string[]): Promise<SkillFileRecord[]> {
+  return Promise.all(
+    filePaths.map(async (filePath) => {
+      const buffer = await readFile(join(directory, filePath))
+      const decoded = readTextFromSkillFile(buffer)
+
+      if (!decoded.ok) {
+        return {
+          path: filePath,
+          content: '',
+          size: buffer.byteLength,
+          editable: false,
+          readOnlyReason: decoded.reason,
+        } satisfies SkillFileRecord
+      }
+
+      const tooLarge = buffer.byteLength > MAX_EDITABLE_SKILL_FILE_BYTES
+
+      return {
+        path: filePath,
+        content: decoded.content,
+        size: buffer.byteLength,
+        editable: !tooLarge,
+        readOnlyReason: tooLarge ? 'too-large' : undefined,
+      } satisfies SkillFileRecord
+    }),
+  )
+}
+
+async function readSkillFileSet(
+  directory: string,
+  location: SkillLocation,
+  folderName: string,
+): Promise<SkillFileSet> {
+  const normalizedFolderName = validateSkillDirectoryName(folderName)
+  const skillDirectory = join(directory, normalizedFolderName)
+  const skillFilePath = join(skillDirectory, 'SKILL.md')
+
+  if (!(await pathExists(skillDirectory)) || !(await pathExists(skillFilePath))) {
+    throw new Error(`skill 不存在：${normalizedFolderName}`)
+  }
+
+  const filePaths = await collectSkillFiles(skillDirectory)
+  const files = await readSkillFileRecords(skillDirectory, filePaths)
+  const skillContent = files.find((file) => file.path === 'SKILL.md')?.content ?? ''
+  const metadata = parseSkillMetadata(skillContent, normalizedFolderName)
+  const skillStat = await stat(skillDirectory)
+
+  return {
+    folderName: normalizedFolderName,
+    location,
+    name: metadata.name,
+    description: metadata.description,
+    skillContent,
+    filePaths,
+    updatedAt: skillStat.mtimeMs,
+    files,
+  }
 }
 
 async function listSkillsFromDirectory(
@@ -402,6 +508,23 @@ async function readSkillSource(
     updatedAt: skillStat.mtimeMs,
     files,
   }
+}
+
+export async function getSkillFileSet(input: {
+  location: SkillLocation
+  folderName: string
+}): Promise<SkillFileSet> {
+  const context = await resolveSkillsContext()
+
+  if (!context.ok) {
+    throw new Error(context.error)
+  }
+
+  return readSkillFileSet(
+    resolveSkillDirectory(context.data, input.location),
+    input.location,
+    input.folderName,
+  )
 }
 
 function toSkillSummary(source: SkillSource): SkillSummary {
