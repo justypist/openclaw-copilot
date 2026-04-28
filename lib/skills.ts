@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { access, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join, normalize } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -1049,6 +1049,21 @@ export async function updateSkillFiles(input: {
       await mkdir(dirname(targetPath), { recursive: true })
       await writeFile(targetPath, `${file.content.trim()}\n`, 'utf8')
     }),
+  )
+
+  const existingFilePaths = await collectSkillFiles(skillDirectory)
+  const existingFiles = await readSkillFileRecords(skillDirectory, existingFilePaths)
+  const nextFilePathSet = new Set(files.map((file) => file.path))
+
+  await Promise.all(
+    existingFiles
+      .filter((file) => !file.editable && !nextFilePathSet.has(file.path))
+      .map(async (file) => {
+        const targetPath = join(stagingSkillDirectory, file.path)
+
+        await mkdir(dirname(targetPath), { recursive: true })
+        await copyFile(join(skillDirectory, file.path), targetPath)
+      }),
   )
 
   try {

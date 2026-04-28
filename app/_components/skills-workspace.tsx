@@ -79,6 +79,30 @@ function getReadOnlyReasonLabel(reason: SkillFileRecord['readOnlyReason']): stri
   return '只读'
 }
 
+function sortSkillFiles<T extends { path: string }>(files: T[]): T[] {
+  return [...files].sort((left, right) => {
+    if (left.path === 'SKILL.md') {
+      return -1
+    }
+
+    if (right.path === 'SKILL.md') {
+      return 1
+    }
+
+    return left.path.localeCompare(right.path)
+  })
+}
+
+function getFileContentSize(content: string): number {
+  return new TextEncoder().encode(content).byteLength
+}
+
+function serializeFileDrafts(files: SkillFileRecord[]): string {
+  return sortSkillFiles(files)
+    .map((file) => [file.path, file.content, String(file.editable), file.readOnlyReason ?? ''].join('\u0000'))
+    .join('\u0001')
+}
+
 interface SkillColumnProps {
   title: string
   location: SkillLocation
@@ -144,7 +168,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const savedSelectedFileContent = selectedSavedFile?.content ?? (selectedFilePath === 'SKILL.md' ? activeSkill.skillContent : '')
   const selectedFileContent = selectedDraftFile?.content ?? savedSelectedFileContent
   const isSelectedFileEditable = selectedDraftFile?.editable ?? true
-  const hasUnsavedChanges = selectedFileContent !== savedSelectedFileContent
+  const hasUnsavedChanges = serializeFileDrafts(draftFiles) !== serializeFileDrafts(savedFiles)
 
   useEffect(() => {
     let isCurrent = true
@@ -285,6 +309,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
           ? {
               ...file,
               content: nextValue,
+              size: getFileContentSize(nextValue),
             }
           : file,
       ),
@@ -349,6 +374,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
           ? {
               ...file,
               content: nextContent,
+              size: getFileContentSize(nextContent),
             }
           : file,
       ),
@@ -395,17 +421,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
       editable: true,
     }
 
-    setDraftFiles((currentFiles) => [...currentFiles, nextFile].sort((left, right) => {
-      if (left.path === 'SKILL.md') {
-        return -1
-      }
-
-      if (right.path === 'SKILL.md') {
-        return 1
-      }
-
-      return left.path.localeCompare(right.path)
-    }))
+    setDraftFiles((currentFiles) => sortSkillFiles([...currentFiles, nextFile]))
     setSelectedFilePath(path)
     setDraftContent('')
     setNewFilePath('')
@@ -540,10 +556,15 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   }
 
   async function handleSaveSkill() {
-    const trimmedDraftContent = draftContent.trim()
+    const files = sortSkillFiles(draftFiles)
+      .filter((file) => file.editable)
+      .map((file) => ({
+        path: file.path,
+        content: file.content,
+      }))
 
-    if (!trimmedDraftContent) {
-      setSkillSaveError('请先填写完整 SKILL.md 内容。')
+    if (!files.some((file) => file.path === 'SKILL.md')) {
+      setSkillSaveError('最终结果必须包含 SKILL.md。')
       return
     }
 
@@ -560,12 +581,12 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         body: JSON.stringify({
           folderName: activeSkill.folderName,
           location: activeSkill.location,
-          content: trimmedDraftContent,
+          files,
         }),
       })
 
       const result = (await response.json()) as {
-        skill?: SkillSummary
+        skill?: SkillSummary & { files?: SkillFileRecord[] }
         error?: string
       }
 
@@ -575,7 +596,18 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
       onSaved(activeSkill, result.skill)
       setCurrentSkill(result.skill)
-      setDraftContent(result.skill.skillContent)
+      const nextFiles = result.skill.files ?? []
+      const nextSelectedFilePath = nextFiles.some((file) => file.path === selectedFilePath)
+        ? selectedFilePath
+        : nextFiles.some((file) => file.path === 'SKILL.md')
+          ? 'SKILL.md'
+          : nextFiles[0]?.path ?? 'SKILL.md'
+      const nextSelectedFile = nextFiles.find((file) => file.path === nextSelectedFilePath)
+
+      setSavedFiles(nextFiles)
+      setDraftFiles(nextFiles)
+      setSelectedFilePath(nextSelectedFilePath)
+      setDraftContent(nextSelectedFile?.content ?? result.skill.skillContent)
       setIsEditing(false)
       clearSelectedFragment()
       setSkillSaveSummary(`已保存 ${result.skill.location}:${result.skill.folderName}。`)
@@ -704,7 +736,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
                   <button
                     type="button"
                     onClick={handleDeleteSelectedFile}
-                    disabled={draftFiles.length === 0}
+                    disabled={draftFiles.length === 0 || !selectedDraftFile?.editable}
                     className="border border-black px-2 py-1 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
                   >
                     删除当前文件
@@ -770,7 +802,15 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
                 disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
                 className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
               >
-                重置到已保存版本
+                重置当前文件
+              </button>
+              <button
+                type="button"
+                onClick={handleResetFileDrafts}
+                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+              >
+                重置全部文件
               </button>
               <span className="text-neutral-500">
                 {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
