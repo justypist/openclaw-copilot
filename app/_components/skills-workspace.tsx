@@ -51,6 +51,34 @@ function getSkillSelectionKey(location: SkillLocation, folderName: string): stri
   return `${location}:${folderName}`
 }
 
+function formatFileSize(size: number): string {
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  return `${(size / 1024).toFixed(1)} KB`
+}
+
+function getReadOnlyReasonLabel(reason: SkillFileRecord['readOnlyReason']): string {
+  if (reason === 'binary') {
+    return '二进制文件'
+  }
+
+  if (reason === 'too-large') {
+    return '文件过大'
+  }
+
+  if (reason === 'unsupported-encoding') {
+    return '编码不支持'
+  }
+
+  if (reason === 'protected') {
+    return '受保护文件'
+  }
+
+  return '只读'
+}
+
 interface SkillColumnProps {
   title: string
   location: SkillLocation
@@ -77,6 +105,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const pendingTextareaViewStateRef = useRef<TextareaViewState | null>(null)
   const [currentSkill, setCurrentSkill] = useState(skill)
   const [savedFiles, setSavedFiles] = useState<SkillFileRecord[]>([])
+  const [draftFiles, setDraftFiles] = useState<SkillFileRecord[]>([])
   const [selectedFilePath, setSelectedFilePath] = useState('SKILL.md')
   const [isLoadingFiles, setIsLoadingFiles] = useState(false)
   const [fileLoadError, setFileLoadError] = useState('')
@@ -109,8 +138,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
   const activeSkill = currentSkill
   const selectedSavedFile = savedFiles.find((file) => file.path === selectedFilePath) ?? null
-  const activeSkillContent = savedFiles.find((file) => file.path === 'SKILL.md')?.content ?? activeSkill.skillContent
-  const hasUnsavedChanges = draftContent !== activeSkillContent
+  const selectedDraftFile = draftFiles.find((file) => file.path === selectedFilePath) ?? null
+  const savedSelectedFileContent = selectedSavedFile?.content ?? (selectedFilePath === 'SKILL.md' ? activeSkill.skillContent : '')
+  const selectedFileContent = selectedDraftFile?.content ?? savedSelectedFileContent
+  const isSelectedFileEditable = selectedDraftFile?.editable ?? true
+  const hasUnsavedChanges = selectedFileContent !== savedSelectedFileContent
 
   useEffect(() => {
     let isCurrent = true
@@ -157,6 +189,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
         setCurrentSkill(result.skill)
         setSavedFiles(nextFiles)
+        setDraftFiles(nextFiles)
         setSelectedFilePath(nextSelectedFilePath)
         setDraftContent(nextSkillContent)
       } catch (error) {
@@ -166,6 +199,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
         setFileLoadError(error instanceof Error ? error.message : '读取 skill 文件失败。')
         setSavedFiles([])
+        setDraftFiles([])
         setSelectedFilePath('SKILL.md')
         setDraftContent(skill.skillContent)
       } finally {
@@ -243,6 +277,16 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
   function handleDraftContentChange(nextValue: string) {
     setDraftContent(nextValue)
+    setDraftFiles((currentFiles) =>
+      currentFiles.map((file) =>
+        file.path === selectedFilePath
+          ? {
+              ...file,
+              content: nextValue,
+            }
+          : file,
+      ),
+    )
     setSkillSaveError('')
     setSkillSaveSummary('')
 
@@ -286,14 +330,36 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
 
   function handleStartEditing() {
     setIsEditing(true)
-    setDraftContent(activeSkillContent)
+    setDraftContent(selectedFileContent)
     setSkillSaveError('')
     setSkillSaveSummary('')
     clearSelectedFragment()
   }
 
   function handleResetDraft() {
-    setDraftContent(activeSkillContent)
+    const nextContent = selectedSavedFile?.content ?? (selectedFilePath === 'SKILL.md' ? activeSkill.skillContent : '')
+
+    setDraftContent(nextContent)
+    setDraftFiles((currentFiles) =>
+      currentFiles.map((file) =>
+        file.path === selectedFilePath
+          ? {
+              ...file,
+              content: nextContent,
+            }
+          : file,
+      ),
+    )
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+    clearSelectedFragment()
+  }
+
+  function handleSelectFile(filePath: string) {
+    const nextFile = draftFiles.find((file) => file.path === filePath) ?? savedFiles.find((file) => file.path === filePath)
+
+    setSelectedFilePath(filePath)
+    setDraftContent(nextFile?.content ?? '')
     setSkillSaveError('')
     setSkillSaveSummary('')
     clearSelectedFragment()
@@ -496,7 +562,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-500">
           <time>{formatTimestamp(activeSkill.updatedAt)}</time>
           <span>{activeSkill.filePaths.join(', ')}</span>
-          <span>当前文件：{selectedSavedFile?.path ?? selectedFilePath}</span>
+          <span>当前文件：{selectedDraftFile?.path ?? selectedFilePath}</span>
         </div>
 
         {isLoadingFiles ? <div className="mt-4 border border-black bg-neutral-50 px-3 py-2 text-sm text-black">正在加载完整文件集...</div> : null}
@@ -508,38 +574,67 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         ) : null}
 
         {isEditing ? (
-          <div className="mt-5 border border-black bg-neutral-50 p-4 sm:p-5">
-            <SkillContentEditor
-              title={`Edit ${selectedFilePath}`}
-              description="支持直接手动编辑，也支持先在正文中选区，再让 AI 只改写该片段。"
-              value={draftContent}
-              placeholder={`${selectedFilePath} 内容会显示在这里。`}
-              textareaRef={generatedSkillContentRef}
-              selection={skillContentSelection}
-              isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
-              selectionRewriteInstruction={selectionRewriteInstruction}
-              selectionRewritePreview={selectionRewritePreview}
-              selectionRewriteError={selectionRewriteError}
-              isRewritingSelection={isRewritingSelection}
-              selectionRewriteTitle="Selected Fragment Rewrite"
-              selectionRewriteDescription="基于当前 skill 正文和源文件上下文生成局部改写预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
-              selectionRewritePlaceholder="例如：保留原意，但把重复步骤改成更清晰的分点说明。"
-              selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
-              selectionRewriteConfirmLabel="确认替换"
-              selectionRewriteTriggerLabel="打开选区改写弹窗"
-              onChange={handleDraftContentChange}
-              onSelectionChange={handleGeneratedContentSelection}
-              onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
-              onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
-              onOpenSelectionRewriteDialog={handleOpenSelectionRewriteDialog}
-              onCloseSelectionRewriteDialog={handleCloseSelectionRewriteDialog}
-              onRewriteSelection={() => {
-                void handleRewriteSelection()
-              }}
-              onApplyRewritePreview={handleApplyRewritePreview}
-            />
+          <div className="mt-5 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <div className="border border-black bg-white p-3">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Files</div>
+              <div className="mt-3 grid gap-2">
+                {draftFiles.map((file) => {
+                  const isSelected = file.path === selectedFilePath
+                  const readOnlyReason = file.editable ? '' : getReadOnlyReasonLabel(file.readOnlyReason)
 
-            <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-white p-3 text-sm">
+                  return (
+                    <button
+                      key={file.path}
+                      type="button"
+                      onClick={() => handleSelectFile(file.path)}
+                      className={[
+                        'grid gap-1 border p-2 text-left text-xs transition-colors',
+                        isSelected ? 'border-black bg-black text-white' : 'border-black bg-white text-black hover:bg-neutral-100',
+                      ].join(' ')}
+                    >
+                      <span className="break-all font-mono">{file.path}</span>
+                      <span className={isSelected ? 'text-neutral-300' : 'text-neutral-500'}>
+                        {formatFileSize(file.size)} · {file.editable ? '可编辑' : readOnlyReason}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="border border-black bg-neutral-50 p-4 sm:p-5">
+              <SkillContentEditor
+                title={`Edit ${selectedFilePath}`}
+                description={isSelectedFileEditable ? '支持直接手动编辑，也支持先在正文中选区，再让 AI 只改写该片段。' : `该文件只读：${getReadOnlyReasonLabel(selectedDraftFile?.readOnlyReason)}。`}
+                value={draftContent}
+                placeholder={`${selectedFilePath} 内容会显示在这里。`}
+                disabled={!isSelectedFileEditable}
+                textareaRef={generatedSkillContentRef}
+                selection={skillContentSelection}
+                isSelectionRewriteDialogOpen={isSelectionRewriteDialogOpen}
+                selectionRewriteInstruction={selectionRewriteInstruction}
+                selectionRewritePreview={selectionRewritePreview}
+                selectionRewriteError={selectionRewriteError}
+                isRewritingSelection={isRewritingSelection}
+                selectionRewriteTitle="Selected Fragment Rewrite"
+                selectionRewriteDescription="基于当前 skill 正文和源文件上下文生成局部改写预览。确认后才会替换正文，也可以先手动编辑预览内容再替换。"
+                selectionRewritePlaceholder="例如：保留原意，但把重复步骤改成更清晰的分点说明。"
+                selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
+                selectionRewriteConfirmLabel="确认替换"
+                selectionRewriteTriggerLabel="打开选区改写弹窗"
+                onChange={handleDraftContentChange}
+                onSelectionChange={handleGeneratedContentSelection}
+                onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
+                onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
+                onOpenSelectionRewriteDialog={handleOpenSelectionRewriteDialog}
+                onCloseSelectionRewriteDialog={handleCloseSelectionRewriteDialog}
+                onRewriteSelection={() => {
+                  void handleRewriteSelection()
+                }}
+                onApplyRewritePreview={handleApplyRewritePreview}
+              />
+
+              <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-white p-3 text-sm">
               <button
                 type="button"
                 onClick={() => {
@@ -561,16 +656,17 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               <span className="text-neutral-500">
                 {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
               </span>
+              </div>
             </div>
           </div>
         ) : (
           <div className="mt-5 border border-black bg-neutral-50 p-3">
             <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
               <span>{selectedFilePath}</span>
-              <span>{activeSkillContent.length} chars</span>
+              <span>{selectedFileContent.length} chars</span>
             </div>
             <pre className="app-scrollbar mt-3 max-h-[70vh] overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-              {activeSkillContent || `${selectedFilePath} 为空。`}
+              {selectedFileContent || `${selectedFilePath} 为空。`}
             </pre>
           </div>
         )}
