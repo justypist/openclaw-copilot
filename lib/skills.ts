@@ -241,6 +241,45 @@ export function buildSkillSourcesContextForAi(sources: SkillSource[]): string {
   return sourcesContext
 }
 
+export function buildSkillFileSetContextForAi(fileSet: SkillFileSet): string {
+  const lines = [
+    `# Skill: ${fileSet.name}`,
+    `- folderName: ${fileSet.folderName}`,
+    `- location: ${fileSet.location}`,
+    `- description: ${fileSet.description}`,
+    `- fileCount: ${fileSet.files.length}`,
+  ]
+
+  for (const file of fileSet.files) {
+    lines.push('')
+    lines.push(`## File: ${file.path}`)
+    lines.push(`- size: ${file.size}`)
+    lines.push(`- editable: ${file.editable ? 'true' : 'false'}`)
+
+    if (file.readOnlyReason) {
+      lines.push(`- readOnlyReason: ${file.readOnlyReason}`)
+    }
+
+    if (file.editable) {
+      lines.push('```md')
+      lines.push(file.content)
+      lines.push('```')
+    } else {
+      lines.push('(content omitted because this file is read-only)')
+    }
+  }
+
+  const fileSetContext = lines.join('\n')
+
+  assertMaxLength(
+    fileSetContext,
+    MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH,
+    `当前 skill 文件集内容过长，最多允许 ${MAX_AI_SKILL_SOURCES_CONTEXT_LENGTH} 个字符。请减少文件内容后重试。`,
+  )
+
+  return fileSetContext
+}
+
 export function validateSkillContentForAi(value: string): string {
   assertMaxLength(
     value,
