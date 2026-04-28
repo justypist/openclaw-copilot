@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation'
 import type { FinalizedSkillDraft, SkillFileDraft, SkillFileRecord, SkillLocation, SkillSummary } from '@/lib/skills'
 
 import SkillContentEditor from './skill-content-editor'
+import SkillDraftFilesEditor from './skill-draft-files-editor'
 
 interface SkillsWorkspaceProps {
   availableSkills: SkillSummary[]
@@ -91,6 +92,14 @@ function sortSkillFiles<T extends { path: string }>(files: T[]): T[] {
 
     return left.path.localeCompare(right.path)
   })
+}
+
+function normalizeSkillFiles(files: SkillFileDraft[], fallbackContent = ''): SkillFileDraft[] {
+  if (files.length > 0) {
+    return sortSkillFiles(files)
+  }
+
+  return [{ path: 'SKILL.md', content: fallbackContent }]
 }
 
 function getFileContentSize(content: string): number {
@@ -1334,6 +1343,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   const [skillName, setSkillName] = useState('')
   const [skillDescription, setSkillDescription] = useState('')
   const [generatedSkillContent, setGeneratedSkillContent] = useState('')
+  const [generatedSkillFiles, setGeneratedSkillFiles] = useState<SkillFileDraft[]>([{ path: 'SKILL.md', content: '' }])
+  const [selectedGeneratedSkillFilePath, setSelectedGeneratedSkillFilePath] = useState('SKILL.md')
   const [isGeneratingSkill, setIsGeneratingSkill] = useState(false)
   const [skillGenerationError, setSkillGenerationError] = useState('')
   const [skillContentSelection, setSkillContentSelection] = useState<SkillContentSelection | null>(null)
@@ -1342,8 +1353,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   const [selectionRewritePreview, setSelectionRewritePreview] = useState<string | null>(null)
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
-  const [finalizedSkill, setFinalizedSkill] = useState<FinalizedSkillDraft | null>(null)
-  const [isFinalizingSkill, setIsFinalizingSkill] = useState(false)
   const [skillFinalizeError, setSkillFinalizeError] = useState('')
   const [isSavingSkill, setIsSavingSkill] = useState(false)
   const [skillSaveError, setSkillSaveError] = useState('')
@@ -1373,7 +1382,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     isPending ||
     isGeneratingSkill ||
     isRewritingSelection ||
-    isFinalizingSkill ||
     isSavingSkill ||
     Boolean(deletingSkillKey) ||
     isDownloadingSkills
@@ -1394,8 +1402,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   }, [generatedSkillContent])
 
   function resetFinalizedSkillState() {
-    setFinalizedSkill(null)
-    setIsFinalizingSkill(false)
     setSkillFinalizeError('')
     setIsSavingSkill(false)
     setSkillSaveError('')
@@ -1453,6 +1459,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     setSkillName('')
     setSkillDescription('')
     setGeneratedSkillContent('')
+    setGeneratedSkillFiles([{ path: 'SKILL.md', content: '' }])
+    setSelectedGeneratedSkillFilePath('SKILL.md')
     setIsGeneratingSkill(false)
     setSkillGenerationError('')
     clearSelectedFragment()
@@ -1506,6 +1514,11 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
   function handleGeneratedSkillContentChange(nextValue: string) {
     resetFinalizedSkillState()
     setGeneratedSkillContent(nextValue)
+    setGeneratedSkillFiles((currentFiles) => normalizeSkillFiles(currentFiles, generatedSkillContent).map((file) => (
+      file.path === selectedGeneratedSkillFilePath
+        ? { ...file, content: nextValue }
+        : file
+    )))
 
     if (
       skillContentSelection &&
@@ -1513,6 +1526,17 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     ) {
       clearSelectedFragment()
     }
+  }
+
+  function handleGeneratedSkillFilesChange(nextFiles: SkillFileDraft[], nextSelectedFilePath: string) {
+    resetFinalizedSkillState()
+    const normalizedFiles = normalizeSkillFiles(nextFiles)
+    const nextSelectedFile = normalizedFiles.find((file) => file.path === nextSelectedFilePath) ?? normalizedFiles[0]
+
+    setGeneratedSkillFiles(normalizedFiles)
+    setSelectedGeneratedSkillFilePath(nextSelectedFile?.path ?? 'SKILL.md')
+    setGeneratedSkillContent(nextSelectedFile?.content ?? '')
+    clearSelectedFragment()
   }
 
   function handleGeneratedContentSelection() {
@@ -1755,6 +1779,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
       const result = (await response.json()) as {
         content?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
@@ -1762,7 +1787,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
         throw new Error(result.error || '合并失败。')
       }
 
-      handleGeneratedSkillContentChange(result.content)
+      handleGeneratedSkillFilesChange(normalizeSkillFiles(result.files ?? [], result.content), 'SKILL.md')
       clearSelectedFragment()
     } catch (error) {
       setSkillGenerationError(error instanceof Error ? error.message : '合并失败。')
@@ -1855,6 +1880,8 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
           name: skillName.trim(),
           description: skillDescription.trim(),
           fullContent: generatedSkillContent,
+          currentFilePath: selectedGeneratedSkillFilePath,
+          files: normalizeSkillFiles(generatedSkillFiles, generatedSkillContent),
           selectedText: skillContentSelection.text,
           instruction: trimmedInstruction,
           selectedSkills,
@@ -1862,11 +1889,23 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       })
 
       const result = (await response.json()) as {
+        mode?: 'draft'
         replacement?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
-      if (!response.ok || typeof result.replacement !== 'string') {
+      if (!response.ok) {
+        throw new Error(result.error || '局部修改失败。')
+      }
+
+      if (result.mode === 'draft' && Array.isArray(result.files)) {
+        handleGeneratedSkillFilesChange(result.files, selectedGeneratedSkillFilePath)
+        clearSelectedFragment()
+        return
+      }
+
+      if (typeof result.replacement !== 'string') {
         throw new Error(result.error || '局部修改失败。')
       }
 
@@ -1906,81 +1945,11 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     clearSelectedFragment()
   }
 
-  async function handleFinalizeSkill() {
-    const trimmedSkillName = skillName.trim()
-    const trimmedSkillDescription = skillDescription.trim()
-    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
-
-    if (!trimmedSkillName) {
-      setSkillFinalizeError('请先填写 skill name。')
-      return
-    }
-
-    if (!trimmedSkillDescription) {
-      setSkillFinalizeError('请先填写 skill description。')
-      return
-    }
-
-    if (!trimmedGeneratedSkillContent) {
-      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
-      return
-    }
-
-    if (selectedSkillCount < 2) {
-      setSkillFinalizeError('至少需要选择两个 skill。')
-      return
-    }
-
-    setIsFinalizingSkill(true)
-    setSkillFinalizeError('')
-    setSkillSaveError('')
-    setSavedSkillDirectory('')
-
-    try {
-      const response = await fetch('/api/skills/finalize-merged', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: trimmedSkillName,
-          description: trimmedSkillDescription,
-          fullContent: trimmedGeneratedSkillContent,
-          selectedSkills,
-        }),
-      })
-
-      const result = (await response.json()) as {
-        folderName?: string
-        files?: SkillFileDraft[]
-        error?: string
-      }
-
-      if (
-        !response.ok ||
-        typeof result.folderName !== 'string' ||
-        !Array.isArray(result.files) ||
-        result.files.length === 0
-      ) {
-        throw new Error(result.error || '定稿失败。')
-      }
-
-      setFinalizedSkill({
-        folderName: result.folderName,
-        files: result.files,
-      })
-    } catch (error) {
-      setSkillFinalizeError(error instanceof Error ? error.message : '定稿失败。')
-      setFinalizedSkill(null)
-    } finally {
-      setIsFinalizingSkill(false)
-    }
-  }
-
   function buildDirectSaveDraft(): FinalizedSkillDraft | null {
     const trimmedSkillName = skillName.trim()
     const trimmedSkillDescription = skillDescription.trim()
-    const trimmedGeneratedSkillContent = generatedSkillContent.trim()
+    const draftFiles = normalizeSkillFiles(generatedSkillFiles, generatedSkillContent)
+    const skillFileContent = draftFiles.find((file) => file.path === 'SKILL.md')?.content.trim() ?? ''
 
     if (!trimmedSkillName) {
       setSkillFinalizeError('请先填写 skill name。')
@@ -1992,19 +1961,14 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
       return null
     }
 
-    if (!trimmedGeneratedSkillContent) {
-      setSkillFinalizeError('请先生成或填写完整 skill 内容。')
+    if (!skillFileContent) {
+      setSkillFinalizeError('请先生成或填写 SKILL.md 内容。')
       return null
     }
 
     return {
       folderName: trimmedSkillName,
-      files: [
-        {
-          path: 'SKILL.md',
-          content: trimmedGeneratedSkillContent,
-        },
-      ],
+      files: draftFiles,
     }
   }
 
@@ -2043,14 +2007,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     }
   }
 
-  async function handleSaveSkill() {
-    if (!finalizedSkill) {
-      return
-    }
-
-    await saveSkillDraft(finalizedSkill)
-  }
-
   async function handleDirectSaveSkill() {
     const draft = buildDirectSaveDraft()
 
@@ -2059,7 +2015,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
     }
 
     setSkillFinalizeError('')
-    setFinalizedSkill(draft)
     await saveSkillDraft(draft)
   }
 
@@ -2152,7 +2107,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
             <div className="flex flex-col gap-2">
               <h2 className="text-sm font-medium tracking-[-0.02em]">Merge Skill Editor</h2>
                 <p className="text-sm text-neutral-600">
-                  已选择 {selectedSkillCount} 个 skills。先生成合并草稿，再支持选区改写、定稿和保存到 `workspace/skills.available`。
+                  已选择 {selectedSkillCount} 个 skills。先生成合并草稿，再支持多文件编辑、选区改写和直接保存到 `workspace/skills.available`。
                 </p>
             </div>
 
@@ -2213,10 +2168,11 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
           </section>
 
           <section className="border border-black bg-white p-4 sm:p-5">
-            <SkillContentEditor
+            <SkillDraftFilesEditor
+              files={normalizeSkillFiles(generatedSkillFiles, generatedSkillContent)}
+              selectedFilePath={selectedGeneratedSkillFilePath}
               title="Generated Content"
-              description="生成后可继续手动编辑，并支持仅改写当前选中的局部片段。"
-              value={generatedSkillContent}
+              description="生成后可继续手动编辑文件集合，并支持仅改写当前选中的局部片段。"
               placeholder="合并结果会出现在这里。"
               textareaRef={generatedSkillContentRef}
               selection={skillContentSelection}
@@ -2231,7 +2187,7 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
               selectionRewriteSubmitLabel={selectionRewritePreview === null ? '生成预览' : '重新生成预览'}
               selectionRewriteConfirmLabel="确认替换"
               selectionRewriteTriggerLabel="打开选区改写弹窗"
-              onChange={handleGeneratedSkillContentChange}
+              onFilesChange={handleGeneratedSkillFilesChange}
               onSelectionChange={handleGeneratedContentSelection}
               onSelectionRewriteInstructionChange={handleSelectionRewriteInstructionChange}
               onSelectionRewritePreviewChange={handleSelectionRewritePreviewChange}
@@ -2245,40 +2201,38 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
 
             <div className="mt-4 border border-black bg-neutral-50 p-4">
               <div className="flex flex-col gap-2">
-                <h4 className="text-sm font-medium">Finalize & Save</h4>
+                <h4 className="text-sm font-medium">Save Skill Files</h4>
                 <p className="text-sm text-neutral-600">
-                  修改满意后，可让 AI 把当前草稿整理成最终 skill 文件集合；内容较小时会只保留 `SKILL.md`。
+                  修改满意后，直接把当前文件集合保存到 `workspace/skills.available`。
                 </p>
               </div>
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleFinalizeSkill()
-                  }}
-                  disabled={isFinalizingSkill}
-                  className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                >
-                  {isFinalizingSkill ? 'Finalizing...' : 'Finalize Skill Files'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void handleDirectSaveSkill()
-                  }}
-                  disabled={isSavingSkill}
-                  className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-                >
-                  {isSavingSkill ? 'Saving...' : 'Direct Save as SKILL.md'}
-                </button>
-
-                {finalizedSkill ? (
-                  <span className="text-sm text-neutral-500">
-                    目录名：`{finalizedSkill.folderName}`，共 {finalizedSkill.files.length} 个文件。
-                  </span>
+                {savedSkillDirectory ? (
+                  <>
+                    <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
+                    <button
+                      type="button"
+                      onClick={handleFinishMergeFlow}
+                      className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
+                    >
+                      完成并返回列表
+                    </button>
+                  </>
                 ) : (
-                  <span className="text-sm text-neutral-500">可先定稿拆分，也可直接把当前内容保存为 `SKILL.md`。</span>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void handleDirectSaveSkill()
+                      }}
+                      disabled={isSavingSkill}
+                      className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                    >
+                      {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
+                    </button>
+                    <span className="text-sm text-neutral-500">将写入当前文件集合，包含 `SKILL.md` 和所有辅助文件。</span>
+                  </>
                 )}
               </div>
 
@@ -2291,54 +2245,6 @@ export default function SkillsWorkspace({ availableSkills, enabledSkills }: Skil
               {skillSaveError ? (
                 <div className="mt-4 border border-black bg-white px-3 py-2 text-sm text-black">
                   {skillSaveError}
-                </div>
-              ) : null}
-
-              {finalizedSkill ? (
-                <div className="mt-4 grid gap-4">
-                  {finalizedSkill.files.map((file) => (
-                    <div key={file.path} className="border border-black bg-white p-3">
-                      <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">
-                        <span>{file.path}</span>
-                        <span>{file.content.length} chars</span>
-                      </div>
-                      <pre className="app-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-black">
-                        {file.content}
-                      </pre>
-                    </div>
-                  ))}
-
-                  <div className="flex flex-wrap items-center gap-2 border border-black bg-white p-3">
-                    {savedSkillDirectory ? (
-                      <>
-                        <span className="break-all text-sm text-neutral-600">已保存到：{savedSkillDirectory}</span>
-                        <button
-                          type="button"
-                          onClick={handleFinishMergeFlow}
-                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800"
-                        >
-                          完成并返回列表
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void handleSaveSkill()
-                          }}
-                          disabled={isSavingSkill}
-                          className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-                        >
-                          {isSavingSkill ? 'Saving...' : 'Save to skills.available'}
-                        </button>
-                        <span className="text-sm text-neutral-500">
-                          将写入 `config.openclaw.root/workspace/skills.available/{finalizedSkill.folderName}`
-                        </span>
-                      </>
-                    )}
-                  </div>
-
                 </div>
               ) : null}
             </div>
