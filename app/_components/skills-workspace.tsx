@@ -103,6 +103,17 @@ function serializeFileDrafts(files: SkillFileRecord[]): string {
     .join('\u0001')
 }
 
+function toEditableFileRecords(files: SkillFileDraft[]): SkillFileRecord[] {
+  return sortSkillFiles(
+    files.map((file) => ({
+      path: file.path,
+      content: file.content,
+      size: getFileContentSize(file.content),
+      editable: true,
+    })),
+  )
+}
+
 interface SkillColumnProps {
   title: string
   location: SkillLocation
@@ -502,6 +513,13 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
           name: activeSkill.name,
           description: activeSkill.description,
           fullContent: draftContent,
+          currentFilePath: selectedFilePath,
+          files: sortSkillFiles(draftFiles)
+            .filter((file) => file.editable)
+            .map((file) => ({
+              path: file.path,
+              content: file.content,
+            })),
           selectedText: skillContentSelection.text,
           instruction: trimmedInstruction,
           selectedSkills: [
@@ -514,11 +532,41 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
       })
 
       const result = (await response.json()) as {
+        mode?: 'draft'
         replacement?: string
+        files?: SkillFileDraft[]
         error?: string
       }
 
-      if (!response.ok || typeof result.replacement !== 'string') {
+      if (!response.ok) {
+        throw new Error(result.error || '局部修改失败。')
+      }
+
+      if (result.mode === 'draft' && Array.isArray(result.files) && result.files.length > 0) {
+        const editableFiles = toEditableFileRecords(result.files)
+        const editableFilePathSet = new Set(editableFiles.map((file) => file.path))
+        const nextFiles = sortSkillFiles([
+          ...editableFiles,
+          ...draftFiles.filter((file) => !file.editable && !editableFilePathSet.has(file.path)),
+        ])
+        const nextSelectedFilePath = nextFiles.some((file) => file.path === selectedFilePath)
+          ? selectedFilePath
+          : nextFiles.some((file) => file.path === 'SKILL.md')
+            ? 'SKILL.md'
+            : nextFiles[0]?.path ?? 'SKILL.md'
+        const nextSelectedFile = nextFiles.find((file) => file.path === nextSelectedFilePath)
+
+        setDraftFiles(nextFiles)
+        setSelectedFilePath(nextSelectedFilePath)
+        setDraftContent(nextSelectedFile?.content ?? '')
+        setSelectionRewritePreview(null)
+        setIsSelectionRewriteDialogOpen(false)
+        setSkillSaveSummary('已生成跨文件草稿预览，确认后可保存。')
+        clearSelectedFragment()
+        return
+      }
+
+      if (typeof result.replacement !== 'string') {
         throw new Error(result.error || '局部修改失败。')
       }
 
