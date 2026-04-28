@@ -206,6 +206,9 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   const [selectionRewritePreview, setSelectionRewritePreview] = useState<string | null>(null)
   const [selectionRewriteError, setSelectionRewriteError] = useState('')
   const [isRewritingSelection, setIsRewritingSelection] = useState(false)
+  const [directoryRewriteInstruction, setDirectoryRewriteInstruction] = useState('')
+  const [directoryRewriteError, setDirectoryRewriteError] = useState('')
+  const [isRewritingDirectory, setIsRewritingDirectory] = useState(false)
 
   useLayoutEffect(() => {
     const textarea = generatedSkillContentRef.current
@@ -385,7 +388,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
   }
 
   function handleDialogClose() {
-    if (isSavingSkill || isRewritingSelection) {
+    if (isSavingSkill || isRewritingSelection || isRewritingDirectory) {
       return
     }
 
@@ -433,6 +436,11 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setSelectionRewriteError('')
   }
 
+  function handleDirectoryRewriteInstructionChange(nextValue: string) {
+    setDirectoryRewriteInstruction(nextValue)
+    setDirectoryRewriteError('')
+  }
+
   function handleDraftContentChange(nextValue: string) {
     setDraftContent(nextValue)
     setDraftFiles((currentFiles) =>
@@ -449,6 +457,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setSkillSaveError('')
     setSkillSaveSummary('')
     setFileDraftError('')
+    setDirectoryRewriteError('')
 
     if (
       skillContentSelection &&
@@ -700,6 +709,83 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
     setIsEditing(false)
   }
 
+  async function handleRewriteDirectory() {
+    const trimmedInstruction = directoryRewriteInstruction.trim()
+
+    if (!trimmedInstruction) {
+      setDirectoryRewriteError('请先填写整目录修改指令。')
+      return
+    }
+
+    const editableFiles = sortSkillFiles(draftFiles)
+      .filter((file) => file.editable)
+      .map((file) => ({
+        path: file.path,
+        content: file.content,
+      }))
+
+    if (!editableFiles.some((file) => file.path === 'SKILL.md')) {
+      setDirectoryRewriteError('当前可编辑草稿必须包含 SKILL.md。')
+      return
+    }
+
+    setIsRewritingDirectory(true)
+    setDirectoryRewriteError('')
+    setSelectionRewriteError('')
+    setSkillSaveError('')
+    setSkillSaveSummary('')
+
+    try {
+      const response = await fetch('/api/skills/rewrite-files', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: activeSkill.name,
+          description: activeSkill.description,
+          folderName: activeSkill.folderName,
+          currentFilePath: selectedFilePath,
+          files: editableFiles,
+          instruction: trimmedInstruction,
+        }),
+      })
+
+      const result = (await response.json()) as {
+        files?: SkillFileDraft[]
+        error?: string
+      }
+
+      if (!response.ok || !Array.isArray(result.files)) {
+        throw new Error(result.error || '整目录修改失败。')
+      }
+
+      const editableFileRecords = toEditableFileRecords(result.files)
+      const editableFilePathSet = new Set(editableFileRecords.map((file) => file.path))
+      const nextFiles = sortSkillFiles([
+        ...editableFileRecords,
+        ...draftFiles.filter((file) => !file.editable && !editableFilePathSet.has(file.path)),
+      ])
+      const nextSelectedFilePath = nextFiles.some((file) => file.path === selectedFilePath)
+        ? selectedFilePath
+        : nextFiles.some((file) => file.path === 'SKILL.md')
+          ? 'SKILL.md'
+          : nextFiles[0]?.path ?? 'SKILL.md'
+      const nextSelectedFile = nextFiles.find((file) => file.path === nextSelectedFilePath)
+
+      setDraftFiles(nextFiles)
+      setSelectedFilePath(nextSelectedFilePath)
+      setDraftContent(nextSelectedFile?.content ?? '')
+      setDirectoryRewriteInstruction('')
+      setSkillSaveSummary('已生成整目录修改草稿，确认后可保存。')
+      clearSelectedFragment()
+    } catch (error) {
+      setDirectoryRewriteError(error instanceof Error ? error.message : '整目录修改失败。')
+    } finally {
+      setIsRewritingDirectory(false)
+    }
+  }
+
   async function handleRewriteSelection() {
     if (!skillContentSelection) {
       return
@@ -898,7 +984,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         role="dialog"
         aria-modal="true"
         aria-label={`${activeSkill.name} preview`}
-        aria-busy={isSavingSkill || isRewritingSelection || isPending}
+        aria-busy={isSavingSkill || isRewritingSelection || isRewritingDirectory || isPending}
         className="app-scrollbar max-h-full w-full max-w-5xl overflow-y-auto border border-black bg-white p-4 shadow-[8px_8px_0_0_#000] sm:p-5"
         onClick={(event) => event.stopPropagation()}
       >
@@ -918,7 +1004,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
                 onClick={() => {
                   void handleSaveSkill()
                 }}
-                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory || !hasUnsavedChanges}
                 className="border border-black bg-black px-3 py-1.5 text-sm text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
               >
                 {isSavingSkill ? 'Saving...' : '保存修改'}
@@ -928,7 +1014,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               <button
                 type="button"
                 onClick={handleResetFileDrafts}
-                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
+                disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory || !hasUnsavedChanges}
                 className="border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
               >
                 重置全部文件
@@ -938,7 +1024,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               <button
                 type="button"
                 onClick={handleCancelEditing}
-                disabled={isSavingSkill || isRewritingSelection}
+                disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory}
                 className="border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
               >
                 放弃编辑
@@ -947,7 +1033,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               <button
                 type="button"
                 onClick={handleStartEditing}
-                disabled={isSavingSkill || isRewritingSelection}
+                disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory}
                 className="border border-black bg-black px-3 py-1.5 text-sm text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500"
               >
                 编辑
@@ -957,7 +1043,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
             <button
               type="button"
               onClick={handleDialogClose}
-              disabled={isSavingSkill || isRewritingSelection}
+              disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory}
               className="shrink-0 border border-black px-3 py-1.5 text-sm transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
             >
               关闭
@@ -980,6 +1066,7 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
         ) : null}
 
         {isEditing ? (
+          <>
           <div className="mt-5 grid min-h-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
             <div className="flex min-h-0 flex-col border border-black bg-white p-3">
               <div className="text-[11px] uppercase tracking-[0.2em] text-neutral-500">Files</div>
@@ -1137,28 +1224,63 @@ function SkillPreviewDialog({ skill, onSaved, onClose }: SkillPreviewDialogProps
               />
 
               <div className="mt-4 flex flex-wrap items-center gap-2 border border-black bg-white p-3 text-sm">
-              <button
-                type="button"
-                onClick={handleSaveCurrentFileDraft}
-                disabled={isSavingSkill || isRewritingSelection || !isSelectedFileEditable}
-                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
-              >
-                保存当前文件
-              </button>
-              <button
-                type="button"
-                onClick={handleResetDraft}
-                disabled={isSavingSkill || isRewritingSelection || !hasUnsavedChanges}
-                className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
-              >
-                重置当前文件
-              </button>
-              <span className="text-neutral-500">
-                {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
-              </span>
+                <button
+                  type="button"
+                  onClick={handleSaveCurrentFileDraft}
+                  disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory || !isSelectedFileEditable}
+                  className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+                >
+                  保存当前文件
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetDraft}
+                  disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory || !hasUnsavedChanges}
+                  className="border border-black px-3 py-1.5 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:text-neutral-400"
+                >
+                  重置当前文件
+                </button>
+                <span className="text-neutral-500">
+                  {hasUnsavedChanges ? '存在未保存修改。' : '当前内容与已保存版本一致。'}
+                </span>
               </div>
             </div>
           </div>
+          <div className="mt-4 border border-black bg-neutral-50 p-4 text-sm">
+            <div className="flex flex-col gap-1">
+              <h4 className="font-medium">整目录修改</h4>
+              <p className="text-neutral-600">
+                对当前 skill 文件集合下指令，AI 可以新增、删除、合并、重命名或同时修改多个文本文件；结果会先写入草稿。
+              </p>
+            </div>
+            <textarea
+              value={directoryRewriteInstruction}
+              onChange={(event) => handleDirectoryRewriteInstructionChange(event.target.value)}
+              placeholder="例如：把 references 下重复的说明合并成一个文件，删除过时脚本说明，并在 SKILL.md 中改为引用新文件。"
+              rows={4}
+              className="app-scrollbar mt-3 min-h-24 w-full resize-y border border-black bg-white px-3 py-2 outline-none transition-colors placeholder:text-neutral-400 focus:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100"
+              disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory}
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  void handleRewriteDirectory()
+                }}
+                disabled={isSavingSkill || isRewritingSelection || isRewritingDirectory || !directoryRewriteInstruction.trim()}
+                className="border border-black bg-black px-3 py-1.5 text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-400"
+              >
+                {isRewritingDirectory ? 'Rewriting...' : '生成整目录草稿'}
+              </button>
+              <span className="text-neutral-500">不会直接保存，确认无误后再点击“保存修改”。</span>
+            </div>
+            {directoryRewriteError ? (
+              <div className="mt-3 border border-black bg-white px-3 py-2 text-black">
+                {directoryRewriteError}
+              </div>
+            ) : null}
+          </div>
+          </>
         ) : (
           <div className="mt-5 border border-black bg-neutral-50 p-3">
             <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.2em] text-neutral-500">

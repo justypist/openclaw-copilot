@@ -1418,7 +1418,7 @@ export default function SessionsWorkspace({
                                 {selectedTargetSkill.folderName}
                               </p>
                               {selectedTargetSkill.filePaths.length > 1 ? (
-                                <p className="mt-2 text-xs">保存时只会更新该目录下的 `SKILL.md`。</p>
+                                <p className="mt-2 text-xs">保存时会写回当前草稿中的所有文本文件。</p>
                               ) : null}
                             </div>
                           ) : null}
